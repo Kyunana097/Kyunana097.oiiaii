@@ -61,9 +61,3 @@ ignore: null
 theme: nexmoe
 deploy:
   type: ''
-math:
-  engine: 'mathjax' # 或 'katex'
-  mathjax:
-    src: custom_mathjax_source
-    config:
-      # MathJax配置

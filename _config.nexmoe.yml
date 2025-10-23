@@ -1,8 +1,8 @@
-avatar: https://cdn.jsdelivr.net/gh/nexmoe/nexmoe.github.io@latest/images/avatar.png # 网站 Logo
+avatar: /images/avatar.jpg # 网站 Logo
 background: # 既是博客的背景，又是文章默认头图
-    path: https://i.dawnlab.me/b5a7e61560facdd5b8aa9683fce147d7.png
+    path: /images/background_mainpage.jpg
     width: 1280
-    height: 726
+    height: 720
 favicon:
   href: /favicon.ico # 网站图标
   type: image/x-icon # 图标类型，可能的值有(image/png, image/vnd.microsoft.icon, image/x-icon, image/gif)
@@ -22,7 +22,7 @@ customStyles:
   - custom.css
   
 # 附加图标库 使用说明：https://docs.nexmoe.com/config/icon
-iconlib: # //at.alicdn.com/t/font_1038733_0xvrvpg9c0r.css
+#iconlib: # //at.alicdn.com/t/font_1038733_0xvrvpg9c0r.css
 
 menu:
     回到首页:
@@ -67,21 +67,6 @@ widgets:
                 - icon-github
                 - rgb(25, 23, 23)
                 - rgba(25, 23, 23, .1)
-            知乎:
-                - https://www.zhihu.com/people/nexmoe
-                - icon-zhihu
-                - rgb(30, 136, 229)
-                - rgba(30, 136, 229, .1)
-            Twitter:
-                - https://twitter.com/nexmoe
-                - icon-twitter
-                - rgb(59, 151, 239)
-                - rgba(59, 151, 239, .1)
-            RSS:
-                - https://nexmoe.com/atom.xml
-                - icon-rss
-                - rgb(247, 132, 34)
-                - rgba(247, 132, 34, .1)
     - name: category
       enable: true
     - name: tagcloud
@@ -142,3 +127,4 @@ slotCopyright: |
 
 slotArticleEnd: | 
   <p><img src="https://i.dawnlab.me/53a8c7cf3ad77a0f0a456ce2c6afe88a.png" loading="lazy"></p>
+
