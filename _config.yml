@@ -1,8 +1,8 @@
-title: Hexo
-subtitle: ''
+title: Kyunana的栈
+subtitle: 'oiiaiioiiiaii'
 description: ''
 keywords: null
-author: John Doe
+author: Kyunana
 language: en
 timezone: ''
 url: http://example.com
@@ -61,3 +61,9 @@ ignore: null
 theme: nexmoe
 deploy:
   type: ''
+math:
+  engine: 'mathjax' # 或 'katex'
+  mathjax:
+    src: custom_mathjax_source
+    config:
+      # MathJax配置
