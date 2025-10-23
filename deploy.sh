@@ -5,3 +5,4 @@ hexo clean
 hexo g
 npm g
 hexo server
+hexo d
