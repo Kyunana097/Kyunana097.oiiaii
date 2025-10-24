@@ -1,7 +1,7 @@
 ---
-title: Hello-World!
+title: Hello World!
 date: 2025-10-23 15:28:43
-tags:
+tags: oiiai
 ---
 # 你居然觉得这里会有东西吗
 ![what](/images/Hello_World/what.jpg)
