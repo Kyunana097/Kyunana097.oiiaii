@@ -18,8 +18,24 @@
     --color-shadow: rgba(161, 177, 204, 0.4);
 }
 
+/* 横竖屏幕博客页显示优化 */
 /* ===== 横屏显示优化 - 增加文章卡片高度 ===== */
 @media screen and (orientation: landscape) and (min-width: 768px) {
+    /* 增加文章卡片的最小高度 */
+    .nexmoe-post,
+    .post-card,
+    .nexmoe-item {
+        min-height: 420px !important;
+    }
+    
+    /* 增加文章封面图片的高度比例 */
+    .nexmoe-post-cover {
+        padding-top: 50% !important;
+    }
+}
+
+/* ===== 竖屏显示优化 - 增加文章卡片高度 ===== */
+@media screen and (orientation: portrait) and (min-width: 768px) {
     /* 增加文章卡片的最小高度 */
     .nexmoe-post,
     .post-card,
