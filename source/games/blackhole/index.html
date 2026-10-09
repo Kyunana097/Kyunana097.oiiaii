@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>黑洞 · 吞噬 — Kyunana的栈</title>
 <meta name="description" content="一个可以躺着玩的解压小游戏：拖动黑洞，让恒星、尘埃和行星落进它的吸积盘。">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 <div id="wrap">
@@ -43,7 +43,7 @@
         <button id="btn-start" class="primary">开始</button>
         <button id="btn-zen-start" class="ghost">自动漫游着看</button>
       </div>
-      <p class="tiny">行星靠近到洛希极限以内会被潮汐力撕成一条碎片流；越靠近视界，粒子越热、越亮。质量涨上去还会陆续解锁<b>彗星</b>（拖着长尾）、<b>星云团</b>（靠近会散成一片尘埃）和<b>双星</b>（互相绕着转，吃掉一颗另一颗会被甩出去）。</p>
+      <p class="tiny">行星靠近到洛希极限以内会被潮汐力撕成一条碎片流；越靠近视界，粒子越热、越亮。质量涨上去还会陆续解锁<b>彗星</b>（拖着长尾）、<b>大星云团</b>（靠近会散成一大片能慢慢被吸进去的尘埃）和<b>小黑洞</b>（自己有引力，会一边吞尘埃一边绕着主黑洞转，最后被主黑洞吃掉）。</p>
     </section>
     <section class="overlay hidden" id="ov-pause">
       <h2>暂停中</h2>
@@ -72,9 +72,8 @@
       <b id="tilt-v">0°</b>
     </label>
     <div class="presets">
-      <button id="tilt-top" class="mini on" type="button">俯视版</button>
-      <button id="tilt-side" class="mini" type="button">侧视版</button>
-      <span class="dim">同一套代码，两个视角</span>
+      <button id="tilt-top" class="mini on" type="button">俯视</button>
+      <button id="tilt-side" class="mini" type="button">侧视</button>
     </div>
   </div>
 
@@ -108,6 +107,6 @@
 </div>
 
 <div id="selftest" hidden></div>
-<script src="game.js?v=7"></script>
+<script src="game.js?v=8"></script>
 </body>
 </html>

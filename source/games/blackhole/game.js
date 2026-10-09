@@ -10,13 +10,13 @@
   var W = 960, H = 640;                 // 逻辑分辨率 3:2
   var FIXED = 1 / 120;                  // 物理步长
   var MAX_FRAME = 0.05;
-  var MAX_PARTICLES = 1500;
+  var MAX_PARTICLES = 1800;
   var GM0 = 9.0e6;                      // 初始 G·M（像素³/秒²）
   var GM_CAP = 4.5e7;
   var R0 = 15;                          // 初始视界半径（1 Rs = 15 px）
   var SOFT = 120;                       // 引力软化，避免中心奇点
   var FIELD_R = 780;                    // 超出这个距离就算飞出场景
-  var TARGET_POP = 430;                 // 场上维持的粒子数
+  var TARGET_POP = 520;                 // 场上维持的粒子数
   var SHADOW_K = 2.6;                   // 阴影半径 / Rs
   var PHOTON_K = 1.5;                   // 光子球 / Rs
   var ISCO_K = 3;                       // 最内稳定圆轨道 / Rs
@@ -29,11 +29,11 @@
     frag:   { r0: 1.4, r1: 2.8, m: 4,  color: '#ffcf9e' },
     jet:    { r0: 1.0, r1: 2.2, m: 0,  color: '#cfeaff' },
     comet:  { r0: 2.4, r1: 3.4, m: 8,  color: '#c8e6ff' },
-    nebula: { r0: 15, r1: 26,  m: 0,  color: '#a98ce0' },
-    binary: { r0: 3.0, r1: 4.0, m: 10, color: '#ffd8a0' }
+    nebula: { r0: 62, r1: 112, m: 0, color: '#a98ce0' },
+    minibh: { r0: 7.0, r1: 10.5, m: 900, color: '#e3d2ff' }
   };
-  var GM_PAIR = 120000;         // 双星之间的相互引力（太弱会被黑洞潮汐力扯散，这也是真实的）
-  var PAIR_SEP = 13;
+  var MINI_GM = 1.1e6;          // 小黑洞的引力参数（按质量缩放）
+  var MINI_INFL = 132;          // 小黑洞能影响多远（按质量缩放）
   var JET_R = 105, JET_PUSH = 1600;
   var ZEN_DIST = 2.4;           // 静观模式：把「视角远近」拨到多少（和滑块是同一个量）
   var SCALE_MIN = 0.18;         // 相机最远（越小看得越广）
@@ -60,7 +60,7 @@
   var UNLOCKS = [
     { mass: 2500,  kind: 'comet',  label: '彗星' },
     { mass: 6000,  kind: 'nebula', label: '星云团' },
-    { mass: 12000, kind: 'binary', label: '双星' }
+    { mass: 12000, kind: 'minibh', label: '小黑洞' }
   ];
 
   var clamp = function (v, a, b) { return v < a ? a : (v > b ? b : v); };
@@ -183,7 +183,7 @@
     var w = {
       isMain: true, paused: false, time: 0,
       bh: { x: W * 0.5, y: H * 0.5, tx: W * 0.5, ty: H * 0.5, r: R0, mass: 1000, gm: GM0, boost: 0, spin: 0 },
-      particles: [], jets: [], sparks: [], rings: [],
+      particles: [], jets: [], sparks: [], rings: [], minis: [],
       stars: [], nebula: [],
       auto: false, autoTimer: 0, autoTx: W * 0.5, autoTy: H * 0.5, userHold: 0,
       labels: true, pull: false, pulseFlare: 0,
@@ -219,9 +219,9 @@
 
   function pickKind(w) {
     var r = rnd();
-    if (w.unlocked.binary && r < 0.05) return 'binary';
-    if (w.unlocked.comet && r < 0.14) return 'comet';
-    if (w.unlocked.nebula && r < 0.185) return 'nebula';
+    if (w.unlocked.minibh && r < 0.030) return 'minibh';
+    if (w.unlocked.comet && r < 0.125) return 'comet';
+    if (w.unlocked.nebula && r < 0.170) return 'nebula';
     if (r < 0.22) return 'planet';
     if (r < 0.56) return 'star';
     return 'dust';
@@ -229,7 +229,7 @@
 
   function spawnParticle(w, kind, anywhere) {
     if (w.particles.length >= MAX_PARTICLES) return null;
-    if (kind === 'binary') return spawnBinary(w, anywhere);
+    if (kind === 'minibh') return spawnMiniBH(w, anywhere);
     var def = KINDS[kind];
     var r = def.r0 + rnd() * (def.r1 - def.r0);
     var m = def.m;
@@ -258,26 +258,34 @@
     return p;
   }
 
-  // 双星：两颗星互相绕着转；一颗被吃掉，另一颗会被甩出去
-  function spawnBinary(w, anywhere) {
-    if (w.particles.length + 2 > MAX_PARTICLES) return null;
+  // 小黑洞：自己带引力，会吞掉附近的物质慢慢变重，同时绕着主黑洞转；
+  // 两个小黑洞靠得太近会并合；被主黑洞吃掉时会一次性贡献很大一块质量
+  function spawnMiniBH(w, anywhere) {
+    if (w.particles.length >= MAX_PARTICLES) return null;
     var ang = rnd() * Math.PI * 2;
     var zoom = clamp(w.cam ? w.cam.scale : 1, SCALE_MIN, 1);
-    var d = (anywhere ? (200 + rnd() * 460) : (540 + rnd() * 180)) / zoom;
-    var cx = w.bh.x + Math.cos(ang) * d, cy = w.bh.y + Math.sin(ang) * d;
-    var vc = circularSpeed(w, d) * (0.8 + rnd() * 0.3), dir = rnd() < 0.5 ? 1 : -1;
-    var bvx = -Math.sin(ang) * vc * dir, bvy = Math.cos(ang) * vc * dir;
-    var ox = Math.cos(ang + Math.PI / 2), oy = Math.sin(ang + Math.PI / 2);
-    var vp = Math.sqrt(GM_PAIR / (2 * PAIR_SEP));   // 圆轨道互绕速度（不然会直接飞散）
-    var a = { kind: 'binary', x: cx + ox * PAIR_SEP / 2, y: cy + oy * PAIR_SEP / 2,
-              vx: bvx + ox * vp, vy: bvy + oy * vp, r: 3.6, m: 10, heat: 0.1,
-              life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0 };
-    var b = { kind: 'binary', x: cx - ox * PAIR_SEP / 2, y: cy - oy * PAIR_SEP / 2,
-              vx: bvx - ox * vp, vy: bvy - oy * vp, r: 3.6, m: 10, heat: 0.1,
-              life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0 };
-    a.pair = b; b.pair = a;
-    w.particles.push(a, b);
-    return a;
+    var d = (anywhere ? (220 + rnd() * 460) : (560 + rnd() * 180)) / zoom;
+    var m = 380 + rnd() * 320;      // 不要太肥，否则吃两颗就把质量顶满
+    var vc = circularSpeed(w, d) * (0.82 + rnd() * 0.2);
+    var dir = rnd() < 0.5 ? 1 : -1;
+    var p = {
+      kind: 'minibh', x: w.bh.x + Math.cos(ang) * d, y: w.bh.y + Math.sin(ang) * d,
+      vx: -Math.sin(ang) * vc * dir, vy: Math.cos(ang) * vc * dir,
+      r: 7 + rnd() * 3.5, m: m, absorbed: 0, heat: 0.35,
+      life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false, cloud: 0
+    };
+    miniStats(p);
+    w.particles.push(p);
+    if (w.isMain) { Sound.chime(true); w.hint = 3; w.hintText = '一颗小黑洞飘进了吸积盘'; }
+    return p;
+  }
+
+  function miniStats(p) {
+    p.gm = MINI_GM * (p.m / 900);
+    p.infl = MINI_INFL * Math.sqrt(p.m / 900);
+    p.infl2 = p.infl * p.infl;
+    p.eat = p.r * 1.15;
+    return p;
   }
 
   function spawnCluster(w, n) {
@@ -320,7 +328,22 @@
 
   function eatParticle(w, p) {
     var bh = w.bh;
-    if (p.kind === 'binary' && p.pair) { p.pair.pair = null; p.pair.kind = 'star'; }
+    if (p.kind === 'minibh') {          // 吃掉一颗小黑洞：连它吞下去的一起算
+      var bonus = p.m + (p.absorbed || 0);
+      bh.mass += bonus;
+      w.eaten += 1;
+      w.rate += 3;
+      w.flash = Math.min(0.8, w.flash + 0.5);
+      w.milestone = 2.2;
+      w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 1.4, max: 560, life: 1, color: '#e3d2ff' });
+      w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 1.4, max: 380, life: 1, color: '#bfe6ff' });
+      addSparks(w, p.x, p.y, '#e3d2ff', 44, 320);
+      fireJets(w, 1.4);
+      w.hint = 3.2;
+      w.hintText = '吞掉一个小黑洞：质量 +' + fmt(Math.round(bonus));
+      Sound.chime(true);
+      return;
+    }
     bh.mass += p.m;
     w.eaten += 1;
     var heat = p.kind === 'star' ? 0.75 : (p.kind === 'planet' ? 1 : 0.4);
@@ -351,14 +374,15 @@
   }
 
   function dissolveNebula(w, p) {
-    var n = 68 + Math.round(p.r * 1.4);
+    var n = 120 + Math.round(p.r * 1.6);
     for (var i = 0; i < n; i++) {
-      var a = rnd() * Math.PI * 2, rr = Math.pow(rnd(), 0.6) * p.r * 1.6;
+      if (w.particles.length >= MAX_PARTICLES) break;
+      var a = rnd() * Math.PI * 2, rr = Math.pow(rnd(), 0.6) * p.r * 1.7;
       w.particles.push({
         kind: 'dust', x: p.x + Math.cos(a) * rr, y: p.y + Math.sin(a) * rr,
-        vx: p.vx * 0.6 + Math.cos(a) * 14, vy: p.vy * 0.6 + Math.sin(a) * 14,
+        vx: p.vx * 0.7 + Math.cos(a) * 10, vy: p.vy * 0.7 + Math.sin(a) * 10,
         r: 1.2 + rnd() * 1.6, m: 1, heat: 0.15, life: 0, maxLife: 0,
-        trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0
+        trail: [], seed: rnd() * 1000, dead: false, cloud: 0
       });
     }
     addSparks(w, p.x, p.y, '#c9a8ff', 24, 90);
@@ -469,15 +493,32 @@
         continue;
       }
 
-      // 双星之间互相吸引
-      if (p.kind === 'binary' && p.pair && !p.pair.dead) {
-        var q = p.pair;
-        var qx = q.x - p.x, qy = q.y - p.y;
-        var qd2 = qx * qx + qy * qy + 25;
-        var qd = Math.sqrt(qd2);
-        var qa = GM_PAIR / qd2;
-        p.vx += qa * qx / qd * dt;
-        p.vy += qa * qy / qd * dt;
+      // 小黑洞的引力：附近的东西会被它拽过去，太近就被它吞掉
+      if (p.kind !== 'minibh' && w.minis && w.minis.length) {
+        for (var mg = 0; mg < w.minis.length; mg++) {
+          var mb = w.minis[mg];
+          if (mb.dead || mb === p) continue;
+          var gx = mb.x - p.x, gy = mb.y - p.y;
+          var gd2 = gx * gx + gy * gy;
+          if (gd2 > mb.infl2) continue;
+          var gd = Math.sqrt(gd2) + 0.001;
+          var ga = mb.gm / (gd2 + 60);
+          p.vx += ga * gx / gd * dt;
+          p.vy += ga * gy / gd * dt;
+          if (gd < mb.eat) {                     // 被小黑洞吞掉
+            p.dead = true;
+            mb.m += p.m;
+            mb.absorbed = (mb.absorbed || 0) + p.m;
+            mb.r = Math.min(15, 7 + (mb.m - 900) / 220);
+            miniStats(mb);
+            mb.heat = Math.min(1, mb.heat + 0.1);
+            w.rate += 0.5;
+            addSparks(w, p.x, p.y, '#d9c2ff', 7, 130);
+            if (w.isMain) Sound.eat(0.3, p.m);
+            break;
+          }
+        }
+        if (p.dead) continue;
       }
 
       var dx = bh.x - p.x, dy = bh.y - p.y;
@@ -489,8 +530,14 @@
       p.vx += acc * dx * inv * dt;
       p.vy += acc * dy * inv * dt;
 
+      // 小黑洞：只用轻微摩擦，让它能绕着转一会儿再慢慢沉进去
+      if (p.kind === 'minibh') {
+        var mdamp = 1 - 0.035 * dt;
+        p.vx *= mdamp; p.vy *= mdamp;
+      }
+
       // 吸积盘粘滞：靠近黑洞时损失角动量，保证会掉进去（不然会永远绕圈）
-      if (d < bh.r * 9) {
+      if (p.kind !== 'minibh' && d < bh.r * 9) {
         var damp = 1 - 0.9 * dt * (1 - d / (bh.r * 9));
         p.vx *= damp; p.vy *= damp;
       }
@@ -530,6 +577,35 @@
       keep.push(p);
     }
     w.particles = keep;
+
+    // 小黑洞并合：靠得太近就合成一个（质量相加）
+    var ms2 = [];
+    for (var q1 = 0; q1 < w.particles.length; q1++) {
+      if (w.particles[q1].kind === 'minibh') ms2.push(w.particles[q1]);
+    }
+    for (var q2 = 0; q2 < ms2.length; q2++) {
+      for (var q3 = q2 + 1; q3 < ms2.length; q3++) {
+        var A = ms2[q2], B = ms2[q3];
+        if (A.dead || B.dead) continue;
+        if (Math.hypot(A.x - B.x, A.y - B.y) < (A.r + B.r) * 1.05) {
+          var mTot = A.m + B.m;
+          A.vx = (A.vx * A.m + B.vx * B.m) / mTot;
+          A.vy = (A.vy * A.m + B.vy * B.m) / mTot;
+          A.m = mTot;
+          A.absorbed = (A.absorbed || 0) + (B.absorbed || 0);
+          A.r = Math.min(15, 7 + (A.m - 900) / 220);
+          miniStats(A);
+          B.dead = true;
+          w.rings.push({ x: A.x, y: A.y, r: 6, max: 300, life: 1, color: '#d9c2ff' });
+          addSparks(w, A.x, A.y, '#e3d2ff', 26, 240);
+          if (w.isMain) { w.hint = 3; w.hintText = '两个小黑洞并合了'; Sound.chime(true); }
+        }
+      }
+    }
+    w.minis = [];
+    for (var q4 = 0; q4 < w.particles.length; q4++) {
+      if (w.particles[q4].kind === 'minibh' && !w.particles[q4].dead) w.minis.push(w.particles[q4]);
+    }
 
     // --- 维持种群
     w.spawnAcc += dt * (18 + w.rateAvg * 3) * zoom;
@@ -754,12 +830,6 @@
       return;
     }
 
-    // 双星：两颗之间拉一条淡淡的连线
-    if (p.kind === 'binary' && p.pair && !p.pair.dead) {
-      ctx.strokeStyle = 'rgba(255,214,150,0.18)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.pair.x, p.pair.y); ctx.stroke();
-    }
 
     // 彗尾：沿轨迹拖出一条渐隐的光带
     if (p.kind === 'comet' && p.trail.length > 1) {
@@ -774,6 +844,27 @@
         ctx.stroke();
       }
       ctx.globalCompositeOperation = 'source-over';
+    }
+
+    if (p.kind === 'minibh') {
+      // 小黑洞：一圈紫辉光 + 真正的暗影 + 一道细环（和主黑洞同一种画法，只是小）
+      var bg = ctx.createRadialGradient(p.x, p.y, p.r * 0.7, p.x, p.y, p.r * 4.2);
+      bg.addColorStop(0, 'rgba(206,180,255,0.30)');
+      bg.addColorStop(0.4, 'rgba(146,112,226,0.16)');
+      bg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 4.2, 0, 6.2832); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#05060c';
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = withAlpha('#efe6ff', 0.9);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.03, 0, 6.2832); ctx.stroke();
+      ctx.strokeStyle = withAlpha('#b79bff', 0.4);
+      ctx.lineWidth = 3.6;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.2, 0, 6.2832); ctx.stroke();
+      return;
     }
 
     if (p.kind === 'jet') {
@@ -1520,8 +1611,10 @@
     w14.bh.mass = 6500; stepWorld(w14, FIXED, {});
     check('质量 6500 解锁星云团', !!w14.unlocked.nebula);
     w14.bh.mass = 12600; stepWorld(w14, FIXED, {});
-    check('质量 12600 解锁双星', !!w14.unlocked.binary);
-    check('解锁会给出提示', w14.hint > 0 && /双星/.test(w14.hintText), w14.hintText);
+    check('质量 12600 解锁小黑洞', !!w14.unlocked.minibh);
+    check('解锁会给出提示', w14.hint > 0 && /小黑洞/.test(w14.hintText), w14.hintText);
+    check('双星已经完全移除（解锁表里没有它）',
+          !UNLOCKS.some(function (u) { return u.kind === 'binary'; }) && !KINDS.binary);
 
     // 16) 彗星会拖尾
     var w15 = createWorld(555);
@@ -1544,34 +1637,89 @@
     }
     var dust1 = w16.particles.filter(function (p) { return p.kind === 'dust'; }).length;
     check('星云团会散成一片尘埃', dust1 >= 60, dust1 + ' 颗尘埃');
+    check('星云团变大了（半径 ≥ 55）', nb.r >= 55, 'r=' + nb.r.toFixed(0));
+    check('大星云团散出的尘埃更多（≥ 150 颗）', dust1 >= 150, dust1 + ' 颗尘埃');
 
-    // 18) 双星互相绕着转
-    var w17 = createWorld(777);
-    w17.particles.length = 0;
-    spawnBinary(w17, true);
-    var maxSep = 0, minSep = 1e9;
-    for (var s17 = 0; s17 < 120 * 4; s17++) {
-      stepWorld(w17, FIXED, {});
-      var pr = w17.particles.filter(function (p) { return p.kind === 'binary'; });
-      if (pr.length === 2) {
-        var sp17 = Math.hypot(pr[0].x - pr[1].x, pr[0].y - pr[1].y);
-        if (sp17 > maxSep) maxSep = sp17;
-        if (sp17 < minSep) minSep = sp17;
-      }
+    // 18) 小黑洞：自己带引力、会吞物质、会被主黑洞吃掉、两个会并合
+    var wbh = createWorld(1801);
+    wbh.particles.length = 0;
+    var mini = spawnMiniBH(wbh, true);
+    check('小黑洞生成了', !!mini && mini.kind === 'minibh', mini ? 'm=' + mini.m.toFixed(0) : '没生成');
+    check('小黑洞有自己的引力参数与影响半径', mini.gm > 0 && mini.infl > 20,
+          'gm=' + mini.gm.toFixed(0) + ' infl=' + mini.infl.toFixed(0));
+
+    // 附近的尘埃应该被它拽近：两者同速、切向偏移，才是在量小黑洞自己的引力
+    var angM = Math.atan2(mini.y - wbh.bh.y, mini.x - wbh.bh.x);
+    var rM = Math.hypot(mini.x - wbh.bh.x, mini.y - wbh.bh.y);
+    var vcM = circularSpeed(wbh, rM);
+    mini.vx = -Math.sin(angM) * vcM; mini.vy = Math.cos(angM) * vcM;
+    var dm = spawnParticle(wbh, 'dust', true);
+    dm.x = mini.x + Math.cos(angM + Math.PI / 2) * 70;
+    dm.y = mini.y + Math.sin(angM + Math.PI / 2) * 70;
+    dm.vx = mini.vx; dm.vy = mini.vy;
+    var dStart = Math.hypot(dm.x - mini.x, dm.y - mini.y);
+    for (var sm = 0; sm < 120 * 2; sm++) stepWorld(wbh, FIXED, {});
+    var dNow = dm.dead ? 0 : Math.hypot(dm.x - mini.x, dm.y - mini.y);
+    check('小黑洞会把附近的尘埃拽过去', dm.dead || dNow < dStart - 8,
+          dStart.toFixed(0) + 'px → ' + (dm.dead ? '被吞了' : dNow.toFixed(0) + 'px'));
+
+    // 直接放在嘴边：应该立刻被吞掉并变重
+    var wbh2 = createWorld(1802);
+    wbh2.particles.length = 0;
+    var mini2 = spawnMiniBH(wbh2, true);
+    var mBefore = mini2.m;
+    var snack = spawnParticle(wbh2, 'star', true);
+    snack.x = mini2.x + mini2.eat * 0.5; snack.y = mini2.y; snack.vx = 0; snack.vy = 0;
+    for (var sm2 = 0; sm2 < 30; sm2++) stepWorld(wbh2, FIXED, {});
+    check('小黑洞会吞掉靠得太近的物质', snack.dead === true);
+    check('吞完会变重', mini2.m > mBefore, mBefore.toFixed(0) + ' → ' + mini2.m.toFixed(0));
+
+    // 主黑洞吃掉小黑洞：一次贡献一大块质量
+    var wbh3 = createWorld(1803);
+    wbh3.particles.length = 0;
+    var mini3 = spawnMiniBH(wbh3, true);
+    mini3.absorbed = 500;
+    mini3.m = 1500;
+    miniStats(mini3);
+    var massBefore = wbh3.bh.mass;
+    mini3.x = wbh3.bh.x + wbh3.bh.r + 6; mini3.y = wbh3.bh.y;
+    mini3.vx = -120; mini3.vy = 0;
+    for (var sm3 = 0; sm3 < 120 * 6; sm3++) {
+      stepWorld(wbh3, FIXED, {});
+      if (wbh3.particles.indexOf(mini3) < 0) break;
     }
-    var prEnd = w17.particles.filter(function (p) { return p.kind === 'binary'; });
-    check('双星 4 秒后仍然成对（没飞散）', prEnd.length === 2, prEnd.length + ' 颗');
-    check('双星 4 秒内没被潮汐力扯散（最大间距 < 80px）', maxSep > 4 && maxSep < 80,
-          '间距 ' + minSep.toFixed(0) + '–' + maxSep.toFixed(0) + ' px');
+    check('主黑洞会吃掉小黑洞', wbh3.particles.indexOf(mini3) < 0);
+    check('吃掉小黑洞会一次性大幅增重', wbh3.bh.mass - massBefore >= 1500,
+          '+' + fmt(Math.round(wbh3.bh.mass - massBefore)));
 
-    // 19) 吃掉一颗，另一颗变回普通恒星
+    // 两个小黑洞靠得足够近会并合
+    var wbh4 = createWorld(1804);
+    wbh4.particles.length = 0;
+    var ma = spawnMiniBH(wbh4, true), mb2 = spawnMiniBH(wbh4, true);
+    ma.x = wbh4.bh.x + 300; ma.y = wbh4.bh.y; ma.vx = 0; ma.vy = 0; ma.m = 900; miniStats(ma);
+    mb2.x = ma.x + (ma.r + mb2.r) * 0.7; mb2.y = ma.y; mb2.vx = 0; mb2.vy = 0; mb2.m = 700; miniStats(mb2);
+    var mSum = ma.m + mb2.m;
+    for (var sm4 = 0; sm4 < 20; sm4++) stepWorld(wbh4, FIXED, {});
+    var live = wbh4.particles.filter(function (p) { return p.kind === 'minibh' && !p.dead; });
+    check('两个小黑洞会并合成一个', live.length === 1, live.length + ' 个');
+    check('并合后质量相加', live.length === 1 && Math.abs(live[0].m - mSum) < 1, live.length === 1 ? live[0].m.toFixed(0) : '—');
+
+    // 长时间跑：不应该再出现双星
+    var wNoBin = createWorld(1805);
+    wNoBin.unlocked = { comet: true, nebula: true, minibh: true };
+    for (var sb = 0; sb < 120 * 20; sb++) stepWorld(wNoBin, FIXED, {});
+    check('跑 20 秒也不会再出现双星',
+          wNoBin.particles.filter(function (p) { return p.kind === 'binary'; }).length === 0);
+
+    // 19) 小黑洞会跟着主黑洞的引力走（不会自己飞出去）
     var w18 = createWorld(888);
     w18.particles.length = 0;
-    var ba = spawnBinary(w18, true);
-    ba.x = w18.bh.x + 1; ba.y = w18.bh.y;      // 直接塞进视界
-    stepWorld(w18, FIXED, {});
-    check('吃掉一颗后另一颗变成普通恒星', ba.pair && ba.pair.kind === 'star' && ba.pair.pair === null,
-          ba.pair ? ba.pair.kind : 'pair 丢了');
+    var mOrbit = spawnMiniBH(w18, true);
+    var rOrbit0 = Math.hypot(mOrbit.x - w18.bh.x, mOrbit.y - w18.bh.y);
+    for (var s18 = 0; s18 < 120 * 6; s18++) stepWorld(w18, FIXED, {});
+    var rOrbit1 = mOrbit.dead ? 0 : Math.hypot(mOrbit.x - w18.bh.x, mOrbit.y - w18.bh.y);
+    check('小黑洞绕着主黑洞转（不会飞走）', mOrbit.dead || rOrbit1 < rOrbit0 * 2.5,
+          rOrbit0.toFixed(0) + 'px → ' + (mOrbit.dead ? '被吃掉' : rOrbit1.toFixed(0) + 'px'));
 
     // 20) 喷流真的会把物质吹开（和侧面同样距离的粒子做对照；要在喷流可见的视角下）
     var tiltSave20 = getTilt();
@@ -1818,7 +1966,7 @@
   window.BlackHoleZen = {
     createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
     pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
-    toggleZen: toggleZen, spawnBinary: spawnBinary, dissolveNebula: dissolveNebula,
+    toggleZen: toggleZen, spawnMiniBH: spawnMiniBH, miniStats: miniStats, dissolveNebula: dissolveNebula,
     renderWorld: renderWorld, getTilt: getTilt, getSquash: getSquash, particleSquash: particleSquash,
     getCamDist: getCamDist, setCamDist: setCamDist,
     jetProj: jetProj,
