@@ -34,6 +34,33 @@
   };
   var MINI_GM = 1.1e6;          // 小黑洞的引力参数（按质量缩放）
   var MINI_INFL = 132;          // 小黑洞能影响多远（按质量缩放）
+  // 每 +10000 质量弹一句（顺序循环）。写得短一点，一行能放下
+  var PHILOSOPHY = [
+    '视界不是墙，只是「回不来」的那条线。',
+    '掉进去的东西没有消失，它变成了面积。',
+    '黑洞的面积只增不减，这是宇宙里最诚实的账本。',
+    '被撕碎的不是行星，是它以为自己是个整体。',
+    '时间在视界上停住，在你身上照常流逝。',
+    '你此刻看见的光，可能来自一颗早已不在的星。',
+    '引力不挑食，它只是重新定义了「附近」。',
+    '越靠近中心，绕一圈需要的力气越少，直到不再需要。',
+    '吸积盘最亮的地方，是物质最后一次发光。',
+    '信息没有丢，只是被摊平在视界上。',
+    '看不见的那部分，也在如实地计算着自己。',
+    '吃得越多，它越大，也越空。',
+    '并合的时候，宇宙为那点质量差赔上一阵引力波。',
+    '事件视界，是「之后」这个词失效的地方。',
+    '潮汐力不针对谁，它只是比较不同高度下落的速度。',
+    '每一克质量都在教时空该怎么弯。',
+    '光能绕着你转很多圈，却始终说不出里面有什么。',
+    '你看到的静止，其实是极端的速度。',
+    '熵增是唯一从不认输的定律。',
+    '逃逸速度超过光速时，「外面」就成了传说。',
+    '黑洞自己不发光，它让别的东西亮起来。',
+    '剩下的霍金辐射很微弱，但它有的是时间。',
+    '你测到的质量，是它过去吃下的一切。',
+    '最安静的地方，密度最大。'
+  ];
   var JET_R = 105, JET_PUSH = 1600;
   var ZEN_DIST = 2.4;           // 静观模式：把「视角远近」拨到多少（和滑块是同一个量）
   var SCALE_MIN = 0.18;         // 相机最远（越小看得越广）
@@ -190,6 +217,7 @@
       pulseCd: 0, spawnAcc: 0, eaten: 0, spawned: 0, bestMass: 1000,
       lastSpecial: {}, specialCount: { comet: 0, nebula: 0, minibh: 0 },
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
+      phil: 0, philText: '', philBand: 0,
       unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
       cam: { scale: 1, x: W * 0.5, y: H * 0.5 }, camDist: 1,
       peak: 0
@@ -711,18 +739,39 @@
     }
     if (w.hint > 0) w.hint -= dt;
 
-    // --- 质量里程碑
-    var ms = [5000, 10000, 25000, 50000, 100000];
-    for (var mi = 0; mi < ms.length; mi++) {
-      if (w.massLog < ms[mi] && bh.mass >= ms[mi]) {
-        w.massLog = ms[mi];
-        w.milestone = 2.6;
-        Sound.chime(mi > 1);
+    // --- 每 +10000 质量：亮一下，并弹一句哲学留言
+    var band = Math.floor(bh.mass / 10000);
+    if (band > w.philBand) {
+      w.philBand = band;
+      w.milestone = 2.6;
+      if (w.phil <= 0) {                      // 上一句还在就不插队，免得刷屏
+        w.phil = 9;
+        w.philText = PHILOSOPHY[(band - 1) % PHILOSOPHY.length];
       }
+      Sound.chime(true);
     }
+    if (w.phil > 0) w.phil -= dt;
   }
 
   // ---------------------------------------------------------------- 渲染
+  // 中文折行（canvas 不会自己折）：尽量在标点处断开，别把词切断
+  function wrapCJK(text, maxChars) {
+    var out = [], cur = '';
+    for (var i = 0; i < text.length; i++) {
+      cur += text[i];
+      if (cur.length >= maxChars) {
+        var cut = -1;
+        for (var j = cur.length - 1; j >= Math.max(0, cur.length - 8); j--) {
+          if ('，。、；：！？'.indexOf(cur[j]) >= 0) { cut = j + 1; break; }
+        }
+        if (cut > 0 && cut < cur.length) { out.push(cur.slice(0, cut)); cur = cur.slice(cut); }
+        else { out.push(cur); cur = ''; }
+      }
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -1074,6 +1123,30 @@
       ctx.font = '15px ui-monospace, monospace';
       ctx.fillStyle = 'rgba(255,214,170,0.75)';
       ctx.fillText('吸积盘又亮了一点', W / 2, 68);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'left';
+    }
+
+    // 哲学留言：画面下方居中，像一句安静的注脚
+    if (w.phil > 0 && w.philText) {
+      var pa = clamp(w.phil / 1.2, 0, 1) * clamp((9 - w.phil) / 0.6, 0, 1);
+      ctx.globalAlpha = pa;
+      ctx.textAlign = 'center';
+      ctx.font = 'italic 300 18px -apple-system, "Noto Sans CJK SC", sans-serif';
+      ctx.fillStyle = 'rgba(216,230,255,0.95)';
+      var plines = wrapCJK(w.philText, 28);
+      var pwid = 0, pli;
+      for (pli = 0; pli < plines.length; pli++) pwid = Math.max(pwid, ctx.measureText(plines[pli]).width);
+      var pbase = H - 104;
+      for (pli = 0; pli < plines.length; pli++) {
+        ctx.fillText(plines[pli], W / 2, pbase + pli * 27);
+      }
+      ctx.globalAlpha = pa * 0.28;
+      ctx.strokeStyle = 'rgba(200,218,255,0.9)';
+      ctx.lineWidth = 1;
+      var ptop = pbase - 20, pbot = pbase + (plines.length - 1) * 27 + 14;
+      ctx.beginPath(); ctx.moveTo(W / 2 - pwid / 2 - 8, ptop); ctx.lineTo(W / 2 + pwid / 2 + 8, ptop); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(W / 2 - pwid / 2 - 8, pbot); ctx.lineTo(W / 2 + pwid / 2 + 8, pbot); ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.textAlign = 'left';
     }
@@ -1451,6 +1524,11 @@
       ' eaten=' + game.eaten + ' minis=' + (game.minis ? game.minis.length : 0) +
       ' time=' + game.time.toFixed(0) + ' rate=' + game.rate.toFixed(1) + ' rateAvg=' + game.rateAvg.toFixed(1) +
       ' target=' + Math.round(TARGET_POP / Math.pow(clamp(game.cam.scale, SCALE_MIN, 1), 1.15));
+    }
+    if (params.has('phil')) {
+      var pIdx = parseInt(params.get('phil'), 10) || 0;
+      game.phil = 6;
+      game.philText = PHILOSOPHY[((pIdx % PHILOSOPHY.length) + PHILOSOPHY.length) % PHILOSOPHY.length];
     }
     if (params.has('jets')) {
       fireJets(game, 1.2);
@@ -2042,6 +2120,52 @@
     for (var sbp = 0; sbp < 120 * 30; sbp++) stepWorld(wBig, FIXED, {});
     check('大黑洞猛吃时场上也不会空（≥ 120 颗）', wBig.particles.length >= 120,
           '铺满 ' + bigFull + ' → 大黑洞猛吃 30 秒后 ' + wBig.particles.length + ' 颗（视界 ' + wBig.bh.r.toFixed(0) + '）');
+
+    // 34) 每 +10000 质量弹一句哲学留言
+    check('留言表足够长（≥ 12 句）', PHILOSOPHY.length >= 12, PHILOSOPHY.length + ' 句');
+    check('每句都短到能放进一行（≤ 40 字）',
+          PHILOSOPHY.every(function (t) { return t.length <= 40; }),
+          '最长 ' + Math.max.apply(null, PHILOSOPHY.map(function (t) { return t.length; })) + ' 字');
+    check('没有一句会被折出孤零零的尾巴',
+          PHILOSOPHY.every(function (t) {
+            var ls = wrapCJK(t, 28);
+            return ls.length === 1;
+          }),
+          '最长 ' + Math.max.apply(null, PHILOSOPHY.map(function (t) { return t.length; })) + ' 字，阈值 28');
+    check('留言互不重复', (function () {
+      var seen = {};
+      for (var i = 0; i < PHILOSOPHY.length; i++) { if (seen[PHILOSOPHY[i]]) return false; seen[PHILOSOPHY[i]] = 1; }
+      return true;
+    })());
+
+    var wP = createWorld(4400);
+    wP.particles.length = 0;
+    check('一开始没有留言', wP.phil <= 0 && wP.philBand === 0);
+    wP.bh.mass = 10500;                       // 越过第一个 10000
+    stepWorld(wP, FIXED, {});
+    check('质量过 10000 会弹留言', wP.phil > 0 && wP.philText.length > 0, wP.philText);
+    var firstMsg = wP.philText;
+    check('留言是留言表里的句子', PHILOSOPHY.indexOf(firstMsg) >= 0);
+    check('顺便也亮一下里程碑数字', wP.milestone > 0, wP.milestone.toFixed(1));
+
+    wP.bh.mass = 20500;                       // 上一句还在显示：不应插队刷屏
+    stepWorld(wP, FIXED, {});
+    check('上一句还在时不会插队（不刷屏）', wP.philText === firstMsg, wP.philText);
+
+    for (var sp2 = 0; sp2 < 120 * 10; sp2++) stepWorld(wP, FIXED, {});
+    check('留言会自动消失', wP.phil <= 0);
+    wP.bh.mass = 30500;
+    stepWorld(wP, FIXED, {});
+    check('下一条留言会换一句新的', wP.philText.length > 0 && wP.philText !== firstMsg, wP.philText);
+    check('留言只在整万档触发（同一档不重复弹）', (function () {
+      var before = wP.philText;
+      stepWorld(wP, FIXED, {});
+      return wP.philText === before;
+    })());
+
+    var pErr = '';
+    try { wP.phil = 5; renderWorld(wP, ctx); } catch (e) { pErr = e.message; }
+    check('留言渲染不报错', pErr === '', pErr);
 
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
