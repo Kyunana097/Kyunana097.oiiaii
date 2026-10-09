@@ -31,6 +31,8 @@ menu:
     文章归档:
         - /archive.html
         - icon-container
+    打砖块:
+        - /games/breakout/
     我的朋友:
         - /PY.html
     给我赞助:

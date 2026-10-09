@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>打砖块 · NEON — Kyunana的栈</title>
+<meta name="description" content="一个用 Canvas 写的打砖块小游戏：连击充能，磁场吸斥，8 关 + 无尽模式。">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="wrap">
+
+  <header id="bar">
+    <a id="back" href="/" title="回到博客">← 博客</a>
+    <h1>打砖块 <span>NEON</span></h1>
+    <div id="bar-btns">
+      <button id="btn-sound" class="ghost" aria-pressed="true" title="声音开关 (M)">🔊</button>
+      <button id="btn-pause" class="ghost" title="暂停 (P / Esc)">❚❚</button>
+    </div>
+  </header>
+
+  <div id="hud">
+    <div class="hud-cell"><span class="k">分数</span><span id="hud-score" class="v">0</span></div>
+    <div class="hud-cell"><span class="k">最高</span><span id="hud-best" class="v dim">0</span></div>
+    <div class="hud-cell"><span class="k">关卡</span><span id="hud-level" class="v">1</span></div>
+    <div class="hud-cell"><span class="k">生命</span><span id="hud-lives" class="v">♥♥♥</span></div>
+    <div class="hud-cell grow">
+      <span class="k">连击 <b id="hud-combo">×1</b></span>
+      <div id="energy" title="能量：连击充能，磁场与慢动作消耗"><i></i></div>
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="game" width="800" height="600" aria-label="打砖块游戏画面"></canvas>
+
+    <div id="fx"></div>
+
+    <section class="overlay" id="ov-start">
+      <h2>打砖块 <em>NEON</em></h2>
+      <p class="lead">连击不断，能量就不断。能量可以换来两件事：把球<b>吸</b>回来，或者把球<b>斥</b>上去继续连。</p>
+      <div class="keys">
+        <div><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> / 拖动＝移动挡板</div>
+        <div><kbd>空格</kbd>＝发球 / 暂停后继续</div>
+        <div><kbd>Z</kbd> 或 <b>按住左键</b>＝磁场吸引（耗能）</div>
+        <div><kbd>X</kbd> 或 <b>按住右键</b>＝磁场排斥（耗能）</div>
+        <div><kbd>Shift</kbd>＝慢动作（耗能，连击翻倍快）</div>
+        <div><kbd>P</kbd>＝暂停　<kbd>M</kbd>＝静音　<kbd>R</kbd>＝重开</div>
+      </div>
+      <div class="row">
+        <button id="btn-start" class="primary">开始游戏</button>
+        <button id="btn-endless" class="ghost">无尽模式</button>
+      </div>
+      <p class="tiny" id="ov-hint">提示：装甲砖要打三下，钢砖打不烂，炸弹砖会连着炸一圈，带点的砖会掉道具。</p>
+    </section>
+
+    <section class="overlay hidden" id="ov-pause">
+      <h2>已暂停</h2>
+      <p class="lead">深呼吸。或者不深呼吸。</p>
+      <div class="row">
+        <button id="btn-resume" class="primary">继续</button>
+        <button id="btn-restart" class="ghost">重开</button>
+      </div>
+    </section>
+
+    <section class="overlay hidden" id="ov-clear">
+      <h2>第 <b id="clear-level">1</b> 关通过</h2>
+      <p class="lead">本关得分 <b id="clear-score">0</b>　最高连击 <b id="clear-combo">0</b></p>
+      <div class="row"><button id="btn-next" class="primary">下一关</button></div>
+    </section>
+
+    <section class="overlay hidden" id="ov-over">
+      <h2>游戏结束</h2>
+      <p class="lead">得分 <b id="over-score">0</b>　最高连击 <b id="over-combo">0</b>　到达第 <b id="over-level">1</b> 关</p>
+      <p class="tiny" id="over-best"></p>
+      <div class="row">
+        <button id="btn-again" class="primary">再来一局</button>
+        <button id="btn-home" class="ghost">回到开头</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="powerbar" aria-live="polite"></div>
+
+  <footer id="foot">
+    <span>Canvas + 原生 JS，无依赖 · 共 <b id="foot-kb">59</b> KB（gzip 后 19 KB）</span>
+    <span class="sep">·</span>
+    <span>设计参考：<a href="https://en.wikipedia.org/wiki/Arkanoid" target="_blank" rel="noopener">Arkanoid (1986)</a> 的胶囊道具与霓虹风，Shatter (2009) 的吸/斥磁场，经典打砖块的挡板角度反射</span>
+    <span class="sep">·</span>
+    <span>写了这个游戏的：<b>deepseek-flash（DSH）</b></span>
+  </footer>
+</div>
+
+<div id="selftest" hidden></div>
+<script src="game.js"></script>
+</body>
+</html>
