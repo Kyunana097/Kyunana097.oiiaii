@@ -63,6 +63,7 @@
   ];
   // ---------------------------------------------------------------- 特殊事件
   // 每过一个质量里程碑来一次，用来打破"解锁完之后就只剩看盘"
+  var EVENT_MIN_MASS = 20000;      // 质量没过这个数之前，不触发特殊事件
   var EVENT_IDS = ['meteor', 'dense', 'cluster', 'ripple', 'lens', 'merge'];
   function zoomOf(w) { return clamp(w.cam ? w.cam.scale : 1, SCALE_MIN, 1); }
   function pushP(w, p) {
@@ -321,7 +322,7 @@
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
       phil: 0, philText: '', philBand: 0,
       eventId: '', lastEventId: '', eventSeq: 0, ripples: [], denseNebula: 0, lensStar: null,
-      evText: '', evT: 0,
+      evText: '', evT: 0, eventsUnlocked: false,
       unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
       cam: { scale: 1, x: W * 0.5, y: H * 0.5 }, camDist: 1,
       peak: 0
@@ -878,7 +879,14 @@
         w.phil = 9;
         w.philText = PHILOSOPHY[(band - 1) % PHILOSOPHY.length];
       }
-      triggerMilestoneEvent(w);               // 同时来一次特殊事件
+      if (bh.mass > EVENT_MIN_MASS) {
+        if (!w.eventsUnlocked) {              // 刚到 20000 这一档：宣布解锁
+          w.eventsUnlocked = true;
+          w.hint = 4.5;
+          w.hintText = '解锁：特殊事件（之后每次质量过万随机来一次）';
+        }
+        triggerMilestoneEvent(w);
+      }
       Sound.chime(true);
     }
     if (w.phil > 0) w.phil -= dt;
@@ -2470,21 +2478,29 @@
     check('并合事件会先放进两颗小黑洞', mBefore2 === 2, mBefore2 + ' 颗');
     check('然后它们会并成一个', mAfter2.length === 1, mAfter2.length + ' 颗');
 
-    // 里程碑会触发事件，且不会连着重样
+    // 里程碑会触发事件（质量过 20000 才开放），且不会连着重样
     var wEv = createWorld(5600);
-    var seenIds = [];
+    var seenIds = [], unlockNotice = '', band1Fired = false;
     for (var band2 = 1; band2 <= 8; band2++) {
       wEv.bh.mass = band2 * 10000 + 500;
       var beforeSeq = wEv.eventSeq;
       stepWorld(wEv, FIXED, {});
-      if (wEv.eventSeq > beforeSeq) seenIds.push(wEv.eventId);
+      var fired = wEv.eventSeq > beforeSeq;
+      if (band2 === 1 && fired) band1Fired = true;
+      if (band2 === 2) unlockNotice = wEv.hintText;
+      if (fired) seenIds.push(wEv.eventId + '#' + band2);
     }
-    check('每次过里程碑都会触发事件', seenIds.length === 8, seenIds.length + ' 次');
+    check('质量 10000 时不触发特殊事件', !band1Fired, band1Fired ? '竟然触发了' : '没有');
+    check('质量过 20000 才解锁（第 2 档开始）',
+          seenIds.length === 7 && /#2$/.test(seenIds[0]), seenIds.join(' → '));
+    check('解锁时会给出提示', /解锁/.test(unlockNotice) && /特殊事件/.test(unlockNotice), unlockNotice);
     check('事件不会连着两次一样', (function () {
       for (var i = 1; i < seenIds.length; i++) if (seenIds[i] === seenIds[i - 1]) return false;
       return true;
     })(), seenIds.join(' → '));
+
     check('事件提示会显示出来', /特殊事件/.test(wEv.evText) && wEv.evT > 0, wEv.evText);
+    check('EVENT_MIN_MASS 是 20000', EVENT_MIN_MASS === 20000, String(EVENT_MIN_MASS));
 
     // 36) 暂停文案轮换
     check('暂停文案有 8 句以上', PAUSE_LINES.length >= 8, PAUSE_LINES.length + ' 句');
