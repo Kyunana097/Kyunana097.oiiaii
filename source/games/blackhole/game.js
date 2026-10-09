@@ -27,8 +27,20 @@
     star:   { r0: 2.4, r1: 4.0, m: 6,  color: '#ffe7bd' },
     planet: { r0: 6.0, r1: 9.5, m: 60, color: '#8fd3c4' },
     frag:   { r0: 1.4, r1: 2.8, m: 4,  color: '#ffcf9e' },
-    jet:    { r0: 1.0, r1: 2.2, m: 0,  color: '#cfeaff' }
+    jet:    { r0: 1.0, r1: 2.2, m: 0,  color: '#cfeaff' },
+    comet:  { r0: 2.4, r1: 3.4, m: 8,  color: '#c8e6ff' },
+    nebula: { r0: 15, r1: 26,  m: 0,  color: '#a98ce0' },
+    binary: { r0: 3.0, r1: 4.0, m: 10, color: '#ffd8a0' }
   };
+  var GM_PAIR = 36000;          // 双星之间的相互引力
+  var PAIR_SEP = 13;
+  var JET_R = 105, JET_PUSH = 1600;
+  var ZEN_SCALE = 0.45;         // 静观模式拉远到多少
+  var UNLOCKS = [
+    { mass: 2500,  kind: 'comet',  label: '彗星' },
+    { mass: 6000,  kind: 'nebula', label: '星云团' },
+    { mass: 12000, kind: 'binary', label: '双星' }
+  ];
 
   var clamp = function (v, a, b) { return v < a ? a : (v > b ? b : v); };
   var lerp = function (a, b, t) { return a + (b - a) * t; };
@@ -155,14 +167,23 @@
       labels: true, pull: false, pulseFlare: 0,
       pulseCd: 0, spawnAcc: 0, eaten: 0, bestMass: 1000,
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
+      unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0,
+      cam: { scale: 1, x: W * 0.5, y: H * 0.5 },
       peak: 0
     };
-    // 背景星场（含少量亮星）
-    for (var i = 0; i < 340; i++) {
-      w.stars.push({ x: rnd() * W, y: rnd() * H, b: 0.18 + rnd() * 0.7, s: rnd() < 0.06 ? 2 : 1 });
+    // 星场铺得比画面大得多：静观模式拉远时才不会看到空白
+    for (var i = 0; i < 1500; i++) {
+      w.stars.push({
+        x: W / 2 + (rnd() - 0.5) * W * 5.2,
+        y: H / 2 + (rnd() - 0.5) * H * 5.2,
+        b: 0.14 + rnd() * 0.72, s: rnd() < 0.06 ? 2 : 1
+      });
     }
-    for (var n = 0; n < 3; n++) {
-      w.nebula.push({ x: rnd() * W, y: rnd() * H, r: 180 + rnd() * 260, c: ['#241a44', '#10233f', '#3a1c33'][n] });
+    for (var n = 0; n < 7; n++) {
+      w.nebula.push({
+        x: W / 2 + (rnd() - 0.5) * W * 2.4, y: H / 2 + (rnd() - 0.5) * H * 2.4,
+        r: 200 + rnd() * 320, c: ['#241a44', '#10233f', '#3a1c33'][n % 3]
+      });
     }
     for (var k = 0; k < 260; k++) spawnParticle(w, 'dust', true);
     for (var s = 0; s < 40; s++) spawnParticle(w, 'star', true);
@@ -172,27 +193,67 @@
 
   function circularSpeed(w, d) { return Math.sqrt(w.bh.gm / Math.max(1, d)); }
 
+  function pickKind(w) {
+    var r = rnd();
+    if (w.unlocked.binary && r < 0.05) return 'binary';
+    if (w.unlocked.comet && r < 0.14) return 'comet';
+    if (w.unlocked.nebula && r < 0.185) return 'nebula';
+    if (r < 0.22) return 'planet';
+    if (r < 0.56) return 'star';
+    return 'dust';
+  }
+
   function spawnParticle(w, kind, anywhere) {
     if (w.particles.length >= MAX_PARTICLES) return null;
+    if (kind === 'binary') return spawnBinary(w, anywhere);
     var def = KINDS[kind];
     var r = def.r0 + rnd() * (def.r1 - def.r0);
     var m = def.m;
     // 从场地外围进来；anywhere=true 时散布在整个场里
     var ang = rnd() * Math.PI * 2;
-    var d = anywhere ? (120 + rnd() * 620) : (520 + rnd() * 180);
+    var zoom = clamp(w.cam ? w.cam.scale : 1, ZEN_SCALE, 1);
+    var d = anywhere ? (120 + rnd() * 620) / zoom : (520 + rnd() * 200) / zoom;
     var x = w.bh.x + Math.cos(ang) * d, y = w.bh.y + Math.sin(ang) * d;
-    x = clamp(x, -120, W + 120); y = clamp(y, -120, H + 120);
     var vc = circularSpeed(w, d) * (0.72 + rnd() * 0.38);
     var dir = rnd() < 0.5 ? 1 : -1;
     var vx = -Math.sin(ang) * vc * dir + (rnd() - 0.5) * 12;
     var vy = Math.cos(ang) * vc * dir + (rnd() - 0.5) * 12;
+    if (kind === 'comet') {
+      // 彗星：比圆轨道快得多，斜插进来，拖着尾巴
+      var cs = circularSpeed(w, d) * (1.15 + rnd() * 0.5);
+      vx = -Math.sin(ang) * cs * dir - Math.cos(ang) * cs * 0.35;
+      vy = Math.cos(ang) * cs * dir - Math.sin(ang) * cs * 0.35;
+    }
     var p = {
       kind: kind, x: x, y: y, vx: vx, vy: vy, r: r, m: m, heat: 0,
-      life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false
+      life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0
     };
     if (kind === 'jet') { p.life = p.maxLife = 1.4 + rnd() * 0.6; }
+    if (kind === 'nebula') { p.m = 0; p.cloud = 1; }
     w.particles.push(p);
     return p;
+  }
+
+  // 双星：两颗星互相绕着转；一颗被吃掉，另一颗会被甩出去
+  function spawnBinary(w, anywhere) {
+    if (w.particles.length + 2 > MAX_PARTICLES) return null;
+    var ang = rnd() * Math.PI * 2;
+    var zoom = clamp(w.cam ? w.cam.scale : 1, ZEN_SCALE, 1);
+    var d = (anywhere ? (200 + rnd() * 460) : (540 + rnd() * 180)) / zoom;
+    var cx = w.bh.x + Math.cos(ang) * d, cy = w.bh.y + Math.sin(ang) * d;
+    var vc = circularSpeed(w, d) * (0.8 + rnd() * 0.3), dir = rnd() < 0.5 ? 1 : -1;
+    var bvx = -Math.sin(ang) * vc * dir, bvy = Math.cos(ang) * vc * dir;
+    var ox = Math.cos(ang + Math.PI / 2), oy = Math.sin(ang + Math.PI / 2);
+    var vp = Math.sqrt(GM_PAIR / (2 * PAIR_SEP));   // 圆轨道互绕速度（不然会直接飞散）
+    var a = { kind: 'binary', x: cx + ox * PAIR_SEP / 2, y: cy + oy * PAIR_SEP / 2,
+              vx: bvx + ox * vp, vy: bvy + oy * vp, r: 3.6, m: 10, heat: 0.1,
+              life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0 };
+    var b = { kind: 'binary', x: cx - ox * PAIR_SEP / 2, y: cy - oy * PAIR_SEP / 2,
+              vx: bvx - ox * vp, vy: bvy - oy * vp, r: 3.6, m: 10, heat: 0.1,
+              life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0 };
+    a.pair = b; b.pair = a;
+    w.particles.push(a, b);
+    return a;
   }
 
   function spawnCluster(w, n) {
@@ -232,6 +293,7 @@
 
   function eatParticle(w, p) {
     var bh = w.bh;
+    if (p.kind === 'binary' && p.pair) { p.pair.pair = null; p.pair.kind = 'star'; }
     bh.mass += p.m;
     w.eaten += 1;
     var heat = p.kind === 'star' ? 0.75 : (p.kind === 'planet' ? 1 : 0.4);
@@ -261,6 +323,23 @@
     w.rings.push({ x: p.x, y: p.y, r: 8, max: 150, life: 1, color: '#ffcf9e' });
   }
 
+  function dissolveNebula(w, p) {
+    var n = 68 + Math.round(p.r * 1.4);
+    for (var i = 0; i < n; i++) {
+      var a = rnd() * Math.PI * 2, rr = Math.pow(rnd(), 0.6) * p.r * 1.6;
+      w.particles.push({
+        kind: 'dust', x: p.x + Math.cos(a) * rr, y: p.y + Math.sin(a) * rr,
+        vx: p.vx * 0.6 + Math.cos(a) * 14, vy: p.vy * 0.6 + Math.sin(a) * 14,
+        r: 1.2 + rnd() * 1.6, m: 1, heat: 0.15, life: 0, maxLife: 0,
+        trail: [], seed: rnd() * 1000, dead: false, pair: null, cloud: 0
+      });
+    }
+    addSparks(w, p.x, p.y, '#c9a8ff', 24, 90);
+    w.rings.push({ x: p.x, y: p.y, r: 10, max: p.r * 3.4, life: 1, color: '#c9a8ff' });
+    if (w.isMain) Sound.breakup();
+    p.dead = true;
+  }
+
   function pulse(w) {
     if (w.pulseCd > 0) return false;
     w.pulseCd = PULSE_CD;
@@ -287,14 +366,17 @@
     inp = inp || {};
     var bh = w.bh;
 
-    // --- 黑洞移动：鼠标/手指优先，其次自动漫游
-    if (inp.pointerX !== null && inp.pointerX !== undefined) {
-      bh.tx = inp.pointerX; bh.ty = inp.pointerY;
-      w.userHold = 1.2;
-    }
+    // --- 黑洞移动：漫游模式下鼠标不接管（想自己拖就先关掉漫游）
     if (inp.auto) w.auto = true;
-    if (w.userHold > 0) w.userHold -= dt;
-    if (w.auto && w.userHold <= 0) {
+    var hasPointer = (inp.pointerX !== null && inp.pointerX !== undefined);
+    if (!w.auto) {
+      if (hasPointer) { bh.tx = inp.pointerX; bh.ty = inp.pointerY; }
+    } else if (hasPointer && !w.autoHintShown) {
+      w.autoHintShown = true;
+      w.hint = 4.5;
+      w.hintText = '漫游中：鼠标不接管（关掉「自动漫游」就能自己拖）';
+    }
+    if (w.auto) {
       w.autoTimer -= dt;
       if (w.autoTimer <= 0) {
         w.autoTimer = 1.6;
@@ -316,6 +398,15 @@
     var follow = 1 - Math.exp(-dt / 0.18);   // 跟手但不生硬
     bh.x = lerp(bh.x, bh.tx, follow);
     bh.y = lerp(bh.y, bh.ty, follow);
+
+    // --- 相机：静观模式缓慢拉远，镜头始终跟着黑洞
+    var wantScale = w.zen ? ZEN_SCALE : 1;
+    w.cam.scale = lerp(w.cam.scale, wantScale, 1 - Math.exp(-dt / 5));
+    w.cam.x = lerp(w.cam.x, bh.x, 1 - Math.exp(-dt / 1.0));
+    w.cam.y = lerp(w.cam.y, bh.y, 1 - Math.exp(-dt / 1.0));
+    var zoom = clamp(w.cam.scale, ZEN_SCALE, 1);
+    var fieldR = FIELD_R / zoom;
+    var targetPop = Math.min(1200, Math.round(TARGET_POP / Math.pow(zoom, 1.15)));
     bh.spin += dt * (0.5 + w.rateAvg * 0.002);
 
     // --- 吸力增强 / 冷却 / 亮度
@@ -346,13 +437,25 @@
         continue;
       }
 
+      // 双星之间互相吸引
+      if (p.kind === 'binary' && p.pair && !p.pair.dead) {
+        var q = p.pair;
+        var qx = q.x - p.x, qy = q.y - p.y;
+        var qd2 = qx * qx + qy * qy + 25;
+        var qd = Math.sqrt(qd2);
+        var qa = GM_PAIR / qd2;
+        p.vx += qa * qx / qd * dt;
+        p.vy += qa * qy / qd * dt;
+      }
+
       var dx = bh.x - p.x, dy = bh.y - p.y;
       var d2 = dx * dx + dy * dy;
       var d = Math.sqrt(d2);
       var soft = d2 + SOFT;
       var acc = gm / soft;
-      p.vx += acc * dx / d * dt;
-      p.vy += acc * dy / d * dt;
+      var inv = 1 / (d > 1 ? d : 1);      // 0/0 会变 NaN：中心附近兜个底
+      p.vx += acc * dx * inv * dt;
+      p.vy += acc * dy * inv * dt;
 
       // 吸积盘粘滞：靠近黑洞时损失角动量，保证会掉进去（不然会永远绕圈）
       if (d < bh.r * 9) {
@@ -372,24 +475,64 @@
         if (d < roche) { breakupPlanet(w, p); continue; }
       }
 
+      // 星云团：飘进内区就散成一团尘埃
+      if (p.kind === 'nebula') {
+        if (d < bh.r * 6 + 260) { dissolveNebula(w, p); continue; }
+        p.heat = 0;
+        keep.push(p);
+        continue;
+      }
+
+      // 彗星：记尾巴
+      if (p.kind === 'comet') {
+        p.trail.push({ x: p.x, y: p.y });
+        if (p.trail.length > 24) p.trail.shift();
+      }
+
       // 热度（越靠近视界越亮）
       p.heat = clamp(1 - (d - bh.r) / (bh.r * 7), 0, 1);
 
       // 飞出场景就回收（等会儿会有新的补进来）
-      if (d > FIELD_R && (p.vx * dx + p.vy * dy) < 0) continue;
+      if (d > fieldR && (p.vx * dx + p.vy * dy) < 0) continue;
 
       keep.push(p);
     }
     w.particles = keep;
 
     // --- 维持种群
-    w.spawnAcc += dt * (18 + w.rateAvg * 3);
-    while (w.spawnAcc > 1 && w.particles.length < TARGET_POP) {
+    w.spawnAcc += dt * (18 + w.rateAvg * 3) * zoom;
+    while (w.spawnAcc > 1 && w.particles.length < targetPop) {
       w.spawnAcc -= 1;
-      var roll = rnd();
-      spawnParticle(w, roll < 0.72 ? 'dust' : (roll < 0.95 ? 'star' : 'planet'), false);
+      spawnParticle(w, pickKind(w), false);
     }
     if (w.spawnAcc > 4) w.spawnAcc = 0;
+
+    // --- 喷流把附近物质吹开（不然喷流只是个装饰）
+    w.jetWindAcc += dt;
+    if (w.jetWindAcc >= 0.08) {
+      w.jetWindAcc = 0;
+      var jets = [];
+      for (var ji = 0; ji < w.particles.length; ji++) {
+        if (w.particles[ji].kind === 'jet') jets.push(w.particles[ji]);
+      }
+      if (jets.length) {
+        for (var qi2 = 0; qi2 < w.particles.length; qi2++) {
+          var q2 = w.particles[qi2];
+          if (q2.kind === 'jet') continue;
+          for (var jj = 0; jj < jets.length; jj++) {
+            var J = jets[jj];
+            var jx = q2.x - J.x, jy = q2.y - J.y;
+            var jd2 = jx * jx + jy * jy;
+            if (jd2 > JET_R * JET_R) continue;
+            var jd = Math.sqrt(jd2) || 1;
+            var fall = 1 - jd / JET_R;
+            var k = JET_PUSH * fall * 0.08;
+            q2.vx += (J.vx / 600 * 0.7 + jx / jd * 0.6) * k;
+            q2.vy += (J.vy / 600 * 0.7 + jy / jd * 0.6) * k;
+          }
+        }
+      }
+    }
 
     // --- 火星 / 圆环
     for (var si = w.sparks.length - 1; si >= 0; si--) {
@@ -407,6 +550,19 @@
     }
 
     if (bh.mass > w.bestMass) w.bestMass = bh.mass;
+
+    // --- 解锁新天体
+    for (var ui = 0; ui < UNLOCKS.length; ui++) {
+      var U = UNLOCKS[ui];
+      if (!w.unlocked[U.kind] && bh.mass >= U.mass) {
+        w.unlocked[U.kind] = true;
+        w.hint = 4;
+        w.hintText = '解锁：' + U.label + '（质量 ' + fmt(U.mass) + '）';
+        w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 3, max: 420, life: 1, color: '#ffe0b0' });
+        Sound.chime(true);
+      }
+    }
+    if (w.hint > 0) w.hint -= dt;
 
     // --- 质量里程碑
     var ms = [5000, 10000, 25000, 50000, 100000];
@@ -471,6 +627,12 @@
     }
     ctx.globalAlpha = 1;
 
+    // 进入世界坐标：静观模式拉远时，星空和粒子铺在更大的范围里
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(w.cam.scale, w.cam.scale);
+    ctx.translate(-w.cam.x, -w.cam.y);
+
     // 背景星（带引力透镜的假位移）
     var shadow = bh.r * SHADOW_K;
     var infl = shadow * 3.4;
@@ -527,6 +689,54 @@
       var p = w.particles[pi];
       var col = KINDS[p.kind].color;
       var hot = p.kind === 'jet' ? 1 : p.heat;
+
+      // 星云团：一大团半透明的紫，靠近黑洞才散开
+      if (p.kind === 'nebula') {
+        var ng = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 1.9);
+        ng.addColorStop(0, withAlpha('#b49cf0', 0.22));
+        ng.addColorStop(0.55, withAlpha('#7a5fd0', 0.11));
+        ng.addColorStop(1, withAlpha('#5a3fb0', 0));
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = ng;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.9, 0, 6.2832); ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        continue;
+      }
+
+      // 双星：两颗之间拉一条淡淡的连线
+      if (p.kind === 'binary' && p.pair && !p.pair.dead) {
+        ctx.strokeStyle = 'rgba(255,214,150,0.18)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.pair.x, p.pair.y); ctx.stroke();
+      }
+
+      // 彗尾：沿轨迹拖出一条渐隐的光带
+      if (p.kind === 'comet' && p.trail.length > 1) {
+        ctx.globalCompositeOperation = 'lighter';
+        for (var ti = 1; ti < p.trail.length; ti++) {
+          var ta = ti / p.trail.length;
+          ctx.strokeStyle = withAlpha('#8fd0ff', ta * 0.45);
+          ctx.lineWidth = 0.8 + ta * 3.4;
+          ctx.beginPath();
+          ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
+          ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
+          ctx.stroke();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      // 喷流：画成一束，而不是一串点
+      if (p.kind === 'jet') {
+        var jl = clamp(p.life / p.maxLife, 0, 1);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = withAlpha('#dff0ff', jl * 0.5);
+        ctx.lineWidth = p.r * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - p.vx * 0.05, p.y - p.vy * 0.05);
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
       if (hot > 0.05) {
         var spr = glowSprite(col);
         var sc = p.r * (3.4 + hot * 5.5);
@@ -601,13 +811,16 @@
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
+    ctx.restore();   // 回到屏幕坐标
+
     // 吞噬闪白 + 暗角
     if (w.flash > 0.01) {
       ctx.fillStyle = 'rgba(255,235,200,' + (w.flash * 0.35) + ')';
       ctx.fillRect(0, 0, W, H);
     }
     var vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.72);
-    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,' + (0.55 + (1 - w.cam.scale) * 0.55) + ')');
     ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
 
     // 里程碑提示
@@ -620,6 +833,17 @@
       ctx.font = '15px ui-monospace, monospace';
       ctx.fillStyle = 'rgba(255,214,170,0.75)';
       ctx.fillText('吸积盘又亮了一点', W / 2, 68);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'left';
+    }
+
+    // 解锁 / 漫游提示
+    if (w.hint > 0 && w.hintText) {
+      ctx.globalAlpha = clamp(w.hint, 0, 1);
+      ctx.textAlign = 'center';
+      ctx.font = '600 17px -apple-system, "Noto Sans CJK SC", sans-serif';
+      ctx.fillStyle = 'rgba(255,230,190,0.92)';
+      ctx.fillText(w.hintText, W / 2, 104);
       ctx.globalAlpha = 1;
       ctx.textAlign = 'left';
     }
@@ -696,12 +920,14 @@
     Sound.unlock();
     if (mode !== 'play' || !game) return;
     if (Date.now() - lastTouchAt < 600) return;
+    if (game.zen) { toggleZen(false); return; }      // 静观模式点一下退出
     setPointer(e.clientX, e.clientY);
   });
   stage.addEventListener('touchstart', function (e) {
     Sound.unlock();
     lastTouchAt = Date.now();
     if (mode !== 'play' || !game) return;
+    if (game.zen) { toggleZen(false); e.preventDefault(); return; }
     var t = e.changedTouches[0];
     if (activeTouchId === null) activeTouchId = t.identifier;
     if (t.identifier === activeTouchId) setPointer(t.clientX, t.clientY);
@@ -729,6 +955,7 @@
     game = createWorld(20261009);
     game.labels = labelsOn;
     setLegend(labelsOn);
+    toggleZen(false);
     if (zen) { game.auto = true; input.auto = true; $('btn-auto').classList.add('on'); }
     mode = 'play';
     show(null);
@@ -790,6 +1017,24 @@
     if (mode === 'menu') { startGame(false); return; }
     if (game) spawnCluster(game, 80);
   });
+  function toggleZen(on) {
+    if (!game) return;
+    game.zen = !!on;
+    if (on) { game.auto = true; input.auto = true; $('btn-auto').classList.add('on'); }
+    var el = $('btn-zen');
+    if (el) el.classList.toggle('on', !!on);
+    var wrap = $('wrap');
+    if (wrap) wrap.classList.toggle('zen', !!on);
+    game.hint = 3;
+    game.hintText = on ? '静观模式：镜头会慢慢拉远，点一下画面退出' : '';
+  }
+  var btnZen = $('btn-zen');
+  if (btnZen) btnZen.addEventListener('click', function (e) {
+    e.preventDefault(); Sound.unlock();
+    if (mode === 'menu') { startGame(false); return; }
+    toggleZen(!(game && game.zen));
+  });
+
   var btnPause2 = $('btn-pause2');
   if (btnPause2) btnPause2.addEventListener('click', function (e) {
     e.preventDefault();
@@ -832,6 +1077,7 @@
     else if (k === 'f' || k === 'F') { if (game) spawnCluster(game, 80); }
     else if (k === 'a' || k === 'A') { $('btn-auto').click(); }
     else if (k === 'l' || k === 'L') { $('btn-labels').click(); }
+    else if (k === 'v' || k === 'V') { if (mode === 'menu') startGame(false); else toggleZen(!(game && game.zen)); }
     else if (k === 'm' || k === 'M') { Sound.setMuted(!Sound.isMuted()); updateSoundBtn(); }
     else if (k === 'p' || k === 'P' || k === 'Escape') { $('btn-pause').click(); }
     else if (k === 'r' || k === 'R') { if (mode !== 'menu') resetGame(); }
@@ -871,7 +1117,13 @@
     input.auto = true; game.auto = true;
     Sound.setSilent(true);
     show(null);
+    var seedMass = parseFloat(params.get('mass') || '0');
+    if (seedMass > 0) game.bh.mass = seedMass;     // 截图用：直接播种质量，好看到解锁后的天体
     runBot(game, shotTime);
+    if (params.has('zen')) {
+      toggleZen(true);
+      for (var zs = 0; zs < 120 * 14; zs++) stepWorld(game, FIXED, { pull: false, auto: true });
+    }
     fitCanvas();
     renderWorld(game, ctx);
     syncHud(game);
@@ -1032,6 +1284,98 @@
       autoEl.click();
     }
 
+    // 13) 漫游模式下鼠标不接管
+    var w12 = createWorld(4321);
+    w12.auto = true; w12.bh.tx = W / 2; w12.bh.ty = H / 2;
+    for (var s12 = 0; s12 < 120 * 2; s12++) stepWorld(w12, FIXED, { pointerX: 60, pointerY: 40, auto: true });
+    check('漫游时鼠标不接管（黑洞没被拖到指针处）', Math.hypot(w12.bh.x - 60, w12.bh.y - 40) > 150,
+          '距指针 ' + Math.round(Math.hypot(w12.bh.x - 60, w12.bh.y - 40)) + 'px');
+
+    // 14) 关掉漫游后鼠标接管
+    var w13 = createWorld(4321);
+    w13.auto = false;
+    for (var s13 = 0; s13 < 120 * 2; s13++) stepWorld(w13, FIXED, { pointerX: 120, pointerY: 120 });
+    check('关掉漫游后鼠标能拖动', Math.hypot(w13.bh.x - 120, w13.bh.y - 120) < 40,
+          '距指针 ' + Math.round(Math.hypot(w13.bh.x - 120, w13.bh.y - 120)) + 'px');
+
+    // 15) 质量解锁新天体
+    var w14 = createWorld(999); w14.bh.mass = 2600; stepWorld(w14, FIXED, {});
+    check('质量 2600 解锁彗星', !!w14.unlocked.comet);
+    w14.bh.mass = 6500; stepWorld(w14, FIXED, {});
+    check('质量 6500 解锁星云团', !!w14.unlocked.nebula);
+    w14.bh.mass = 12600; stepWorld(w14, FIXED, {});
+    check('质量 12600 解锁双星', !!w14.unlocked.binary);
+    check('解锁会给出提示', w14.hint > 0 && /双星/.test(w14.hintText), w14.hintText);
+
+    // 16) 彗星会拖尾
+    var w15 = createWorld(555);
+    w15.particles.length = 0;
+    spawnParticle(w15, 'comet', true);
+    for (var s15 = 0; s15 < 120 * 2; s15++) stepWorld(w15, FIXED, {});
+    var comets = w15.particles.filter(function (p) { return p.kind === 'comet'; });
+    check('彗星会拖出尾巴', comets.length > 0 && comets[0].trail.length > 5,
+          comets.length ? comets[0].trail.length + ' 段' : '彗星没了');
+
+    // 17) 星云团靠近会散成尘埃
+    var w16 = createWorld(666);
+    w16.particles.length = 0;
+    var nb = spawnParticle(w16, 'nebula', true);
+    nb.x = w16.bh.x + 300; nb.y = w16.bh.y; nb.vx = 0; nb.vy = 0;
+    var dust0 = 0;
+    for (var s16 = 0; s16 < 120 * 12; s16++) {
+      stepWorld(w16, FIXED, {});
+      if (!w16.particles.some(function (p) { return p.kind === 'nebula'; })) break;
+    }
+    var dust1 = w16.particles.filter(function (p) { return p.kind === 'dust'; }).length;
+    check('星云团会散成一片尘埃', dust1 >= 60, dust1 + ' 颗尘埃');
+
+    // 18) 双星互相绕着转
+    var w17 = createWorld(777);
+    w17.particles.length = 0;
+    spawnBinary(w17, true);
+    var sep0 = 0;
+    for (var s17 = 0; s17 < 120 * 4; s17++) {
+      stepWorld(w17, FIXED, {});
+      var pr = w17.particles.filter(function (p) { return p.kind === 'binary'; });
+      if (pr.length === 2) sep0 = Math.hypot(pr[0].x - pr[1].x, pr[0].y - pr[1].y);
+    }
+    var prEnd = w17.particles.filter(function (p) { return p.kind === 'binary'; });
+    check('双星 4 秒后仍然成对（没飞散）', prEnd.length === 2, prEnd.length + ' 颗');
+    check('双星间距保持在合理范围', sep0 > 4 && sep0 < 60, sep0.toFixed(1) + ' px');
+
+    // 19) 吃掉一颗，另一颗变回普通恒星
+    var w18 = createWorld(888);
+    w18.particles.length = 0;
+    var ba = spawnBinary(w18, true);
+    ba.x = w18.bh.x + 1; ba.y = w18.bh.y;      // 直接塞进视界
+    stepWorld(w18, FIXED, {});
+    check('吃掉一颗后另一颗变成普通恒星', ba.pair && ba.pair.kind === 'star' && ba.pair.pair === null,
+          ba.pair ? ba.pair.kind : 'pair 丢了');
+
+    // 20) 喷流真的会把物质吹开（和侧面同样距离的粒子做对照）
+    var w19 = createWorld(1010);
+    w19.particles.length = 0;
+    var inJet = { kind: 'dust', x: w19.bh.x, y: w19.bh.y - 220, vx: 0, vy: 0, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], seed: 1, dead: false, pair: null, cloud: 0 };
+    var side = { kind: 'dust', x: w19.bh.x + 220, y: w19.bh.y, vx: 0, vy: 0, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], seed: 2, dead: false, pair: null, cloud: 0 };
+    w19.particles.push(inJet, side);
+    var bomb = { kind: 'planet', x: w19.bh.x + 4, y: w19.bh.y, vx: 0, vy: 0, r: 8, m: 60, heat: 0, life: 0, maxLife: 0, trail: [], seed: 3, dead: false, pair: null, cloud: 0 };
+    w19.particles.push(bomb);
+    for (var s19 = 0; s19 < 120 * 1.5; s19++) stepWorld(w19, FIXED, {});
+    var rJet = Math.hypot(inJet.x - w19.bh.x, inJet.y - w19.bh.y);
+    var rSide = Math.hypot(side.x - w19.bh.x, side.y - w19.bh.y);
+    check('喷流把 funnel 里的物质吹得比侧面更远', rJet > rSide,
+          '喷流侧 ' + rJet.toFixed(0) + 'px vs 侧面 ' + rSide.toFixed(0) + 'px');
+
+    // 21) 静观模式：镜头拉远、自动漫游、退出后拉回
+    var w20 = createWorld(2020);
+    toggleZen(true);
+    var g0 = game; game = w20; toggleZen(true); game = g0;
+    for (var s20 = 0; s20 < 120 * 8; s20++) stepWorld(w20, FIXED, {});
+    check('静观模式镜头会拉远', w20.cam.scale < 0.85, w20.cam.scale.toFixed(2));
+    w20.zen = false;
+    for (var s21 = 0; s21 < 120 * 8; s21++) stepWorld(w20, FIXED, {});
+    check('退出静观后镜头拉回', w20.cam.scale > 0.9, w20.cam.scale.toFixed(2));
+
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
     document.title = (results.pass ? 'SELFTEST PASS' : 'SELFTEST FAIL') + ' ' +
@@ -1050,6 +1394,7 @@
   window.BlackHoleZen = {
     createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
     pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
+    toggleZen: toggleZen, spawnBinary: spawnBinary, dissolveNebula: dissolveNebula,
     getGame: function () { return game; }, getMode: function () { return mode; }
   };
 })();

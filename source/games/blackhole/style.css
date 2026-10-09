@@ -110,6 +110,9 @@ button.ghost[aria-pressed="false"] { opacity: .45; }
 .ctl.cool { opacity: .5; }
 .ctl:disabled { cursor: default; }
 
+#wrap.zen #hud, #wrap.zen #legend, #wrap.zen #foot { opacity: .18; transition: opacity 1s; }
+#wrap.zen #game { cursor: none; }
+
 #foot { margin-top: 18px; color: var(--dim); font-size: 12px; line-height: 1.9; }
 #foot a { color: #9fb2dd; }
 #foot b { color: #c8d2ec; }

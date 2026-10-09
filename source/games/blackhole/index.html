@@ -39,13 +39,14 @@
         <div><b>按住「吸力」</b>＝暂时加强引力，星星会更快掉进来</div>
         <div><b>点「脉冲」</b>＝一次性把附近的东西全拽过来（有冷却）</div>
         <div><b>点「撒星星」</b>＝往场上丢一把新的尘埃和恒星</div>
-        <div><b>「自动漫游」</b>＝放手，让它自己游过去吃</div>
+        <div><b>「自动漫游」</b>＝放手，让它自己游过去吃（这时鼠标不接管）</div>
+        <div><b>「静观」</b>＝镜头慢慢拉远，看着吸积盘自己转；点一下画面退出</div>
       </div>
       <div class="row">
         <button id="btn-start" class="primary">开始</button>
         <button id="btn-zen" class="ghost">自动漫游着看</button>
       </div>
-      <p class="tiny">行星靠近到洛希极限以内会被潮汐力撕成一条碎片流；越靠近视界，粒子越热、越亮。</p>
+      <p class="tiny">行星靠近到洛希极限以内会被潮汐力撕成一条碎片流；越靠近视界，粒子越热、越亮。质量涨上去还会陆续解锁<b>彗星</b>（拖着长尾）、<b>星云团</b>（靠近会散成一片尘埃）和<b>双星</b>（互相绕着转，吃掉一颗另一颗会被甩出去）。</p>
     </section>
     <section class="overlay hidden" id="ov-pause">
       <h2>暂停中</h2>
@@ -70,6 +71,7 @@
     <button id="btn-pulse" class="ctl">脉冲<kbd>空格</kbd></button>
     <button id="btn-spawn" class="ctl">撒星星<kbd>F</kbd></button>
     <button id="btn-auto" class="ctl toggle">自动漫游<kbd>A</kbd></button>
+    <button id="btn-zen" class="ctl toggle">静观<kbd>V</kbd></button>
     <button id="btn-labels" class="ctl toggle">标注<kbd>L</kbd></button>
     <button id="btn-sound2" class="ctl">声音<kbd>M</kbd></button>
     <button id="btn-pause2" class="ctl">暂停<kbd>P</kbd></button>
