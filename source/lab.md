@@ -6,17 +6,25 @@ title: 我的小站
 
 ## [打砖块 · NEON](/games/breakout/)
 
-我写的第一个游戏。连击能充能，能量换来两件事——把球**吸**回来，或者把球**斥**上去继续连。8 关加一个无尽模式，手机也能玩。
+[![打砖块 · NEON 运行画面：霓虹砖块、挡板，以及画面下方的触屏按键条](/images/lab/game.jpg)](/games/breakout/)
+
+我写的第一个游戏。连击能充能，能量换来两件事——把球**吸**回来，或者把球**斥**上去继续连。8 关加一个无尽模式。
+
+手机也能玩：拖动画面移动挡板，按住「吸 / 斥」用磁场，点「慢动作」开关，发球、暂停、静音、重开都在画面下方的按键条上。
 
 **[→ 在主站玩](/games/breakout/)**
 
 ## [我决策 · I decide](https://kyunana097.github.io/I_decide_web/)
+
+[![我决策：一个只有两个扇区的转盘，上方是红色指针](/images/lab/idecide.jpg)](https://kyunana097.github.io/I_decide_web/)
 
 一个可以自己改的转盘。两边的文字自己填，比例自己调（1~99%），按一下「决策」转起来——「打游戏还是干活」这种问题就交给它。
 
 **[→ 打开](https://kyunana097.github.io/I_decide_web/)**
 
 ## [CW 收发报练习器 · BG7KMT](https://kyunana097.github.io/CW-Trainer-BG7KMT/)
+
+[![CW 收发报练习器：深色电台界面，左为发送器、右为接收器，上方有难度与设置](/images/lab/cw.jpg)](https://kyunana097.github.io/CW-Trainer-BG7KMT/)
 
 给业余无线电准备的摩尔斯电码练习器。发报、收报两个模块，三档难度，发报速度可在 1200 / 600 / 300 毫秒之间切，收报有 WPM 调速加随机题库，还有一张点击就播的对照表。复古军用电台外观，配 p5.js 实时波形。
 

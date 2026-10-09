@@ -411,6 +411,13 @@
 
   // ---------------------------------------------------------------- 输入
   var input = { dir: 0, magnet: 0, slow: false };
+  function resetInputs() {
+    input.dir = 0; input.magnet = 0; input.slow = false;
+    ['btn-attract', 'btn-repel', 'btn-slow'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.remove('on');
+    });
+  }
 
   // ---------------------------------------------------------------- 物理
   function stepWorld(w, dt, inp) {
@@ -873,6 +880,8 @@
     [els.ovStart, els.ovPause, els.ovClear, els.ovOver].forEach(function (o) { o.classList.add('hidden'); });
     if (which === 'start') els.ovStart.classList.remove('hidden');
     if (which === 'pause') els.ovPause.classList.remove('hidden');
+    var p2 = document.getElementById('btn-pause2');
+    if (p2) { p2.firstChild.textContent = (which === 'pause') ? '继续' : '暂停'; }
     if (which === 'clear') els.ovClear.classList.remove('hidden');
     if (which === 'over') els.ovOver.classList.remove('hidden');
   }
@@ -882,6 +891,7 @@
 
   function startGame(endless) {
     Sound.unlock();
+    resetInputs();
     game = createWorld({ main: true, endless: !!endless, level: 1 });
     best = Math.max(best, 0);
     mode = 'play';
@@ -890,6 +900,7 @@
   }
 
   function nextLevel() {
+    resetInputs();
     var endless = game.endless;
     var lvl = game.level + 1;
     var carry = { score: game.score, lives: game.lives, bestCombo: game.bestCombo, endless: endless };
@@ -900,7 +911,7 @@
     syncHud(game);
   }
 
-  function restart() { startGame(game ? game.endless : false); }
+  function restart() { resetInputs(); startGame(game ? game.endless : false); }
 
   function gameOver() {
     if (game.score > best) {
@@ -983,7 +994,7 @@
     else if (k === 'Shift') { input.slow = false; }
   });
   window.addEventListener('blur', function () {
-    input.dir = 0; input.magnet = 0; input.slow = false;
+    resetInputs();
     if (mode === 'play') { mode = 'pause'; show('pause'); }
   });
 
@@ -991,6 +1002,8 @@
     var m = Sound.isMuted();
     els.btnSound.textContent = m ? '🔇' : '🔊';
     els.btnSound.setAttribute('aria-pressed', m ? 'false' : 'true');
+    var b2 = document.getElementById('btn-sound2');
+    if (b2) { b2.firstChild.textContent = m ? '静音中' : '声音'; }
   }
   updateSoundBtn();
 
@@ -1002,6 +1015,67 @@
   $('btn-again').addEventListener('click', function () { restart(); });
   $('btn-home').addEventListener('click', function () { mode = 'menu'; show('start'); });
   els.btnSound.addEventListener('click', function () { Sound.setMuted(!Sound.isMuted()); updateSoundBtn(); });
+  // ---------------------------------------------------------------- 触屏实体按键
+  // 手机上必须的：磁场要按住、慢动作要开关、发球/暂停/静音/重开都要能点
+  [['btn-attract', 1], ['btn-repel', -1]].forEach(function (pair) {
+    var el = document.getElementById(pair[0]);
+    if (!el) return;
+    var t = 0;
+    var press = function (e) {
+      e.preventDefault(); e.stopPropagation();
+      Sound.unlock();
+      input.magnet = pair[1];
+      el.classList.add('on');
+      if (navigator.vibrate) { try { navigator.vibrate(8); } catch (err) {} }
+      t = Date.now();
+    };
+    var release = function (e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      if (input.magnet === pair[1]) input.magnet = 0;
+      el.classList.remove('on');
+    };
+    el.addEventListener('pointerdown', press);
+    el.addEventListener('pointerup', release);
+    el.addEventListener('pointercancel', release);
+    el.addEventListener('pointerleave', release);
+    el.addEventListener('lostpointercapture', release);
+    el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  });
+
+  var btnFire = document.getElementById('btn-fire');
+  if (btnFire) btnFire.addEventListener('click', function (e) {
+    e.preventDefault(); Sound.unlock();
+    if (mode === 'menu') startGame(false);
+    else if (mode === 'pause') { mode = 'play'; show(null); }
+    else needLaunch = true;
+  });
+
+  var btnSlow = document.getElementById('btn-slow');
+  if (btnSlow) btnSlow.addEventListener('click', function (e) {
+    e.preventDefault(); Sound.unlock();
+    input.slow = !input.slow;
+    btnSlow.classList.toggle('on', input.slow);
+  });
+
+  var btnPause2 = document.getElementById('btn-pause2');
+  if (btnPause2) btnPause2.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (mode === 'play') { mode = 'pause'; show('pause'); }
+    else if (mode === 'pause') { mode = 'play'; show(null); }
+  });
+
+  var btnSound2 = document.getElementById('btn-sound2');
+  if (btnSound2) btnSound2.addEventListener('click', function (e) {
+    e.preventDefault();
+    Sound.setMuted(!Sound.isMuted()); updateSoundBtn();
+  });
+
+  var btnRestart2 = document.getElementById('btn-restart2');
+  if (btnRestart2) btnRestart2.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (mode !== 'menu') restart(); else startGame(false);
+  });
+
   $('btn-pause').addEventListener('click', function () {
     if (mode === 'play') { mode = 'pause'; show('pause'); }
     else if (mode === 'pause') { mode = 'play'; show(null); }
@@ -1272,6 +1346,38 @@
     }
     check('实战最佳连击 ≥ 8', bestAny >= 8, 'best=' + bestAny);
 
+    // 6) 触屏实体按键（手机能不能玩，全靠这一组测试）
+    var ids = ['btn-fire', 'btn-attract', 'btn-repel', 'btn-slow', 'btn-pause2', 'btn-sound2', 'btn-restart2'];
+    var missing = ids.filter(function (id) { return !document.getElementById(id); });
+    check('七个实体按键都在页面上', missing.length === 0, missing.join(','));
+
+    function fire(el, type) {
+      el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 99 }));
+    }
+    var at = document.getElementById('btn-attract');
+    var rp = document.getElementById('btn-repel');
+    var sl = document.getElementById('btn-slow');
+    if (at && rp && sl) {
+      resetInputs();
+      fire(at, 'pointerdown');
+      check('按住「吸」→ 磁场=吸引', input.magnet === 1, 'magnet=' + input.magnet);
+      fire(at, 'pointerup');
+      check('松开「吸」→ 磁场归零', input.magnet === 0, 'magnet=' + input.magnet);
+      fire(rp, 'pointerdown');
+      check('按住「斥」→ 磁场=排斥', input.magnet === -1, 'magnet=' + input.magnet);
+      fire(rp, 'pointerup');
+      check('松开「斥」→ 磁场归零', input.magnet === 0, 'magnet=' + input.magnet);
+      var s0 = input.slow;
+      sl.click();
+      check('「慢动作」可点开', input.slow === !s0, 'slow=' + input.slow);
+      sl.click();
+      check('「慢动作」可点关', input.slow === s0, 'slow=' + input.slow);
+      var fireBtn = document.getElementById('btn-fire');
+      fireBtn.click();
+      check('「发球」能从菜单开局', mode === 'play' && !!game, 'mode=' + mode);
+      resetInputs();
+    }
+
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
     document.title = (results.pass ? 'SELFTEST PASS' : 'SELFTEST FAIL') + ' ' +
@@ -1289,6 +1395,7 @@
 
   // 对外暴露一点东西，方便调试
   window.BreakoutNEON = {
+    input: input, resetInputs: resetInputs, getMode: function () { return mode; },
     createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
     runBot: runBot, LEVELS: LEVELS, parseLevel: parseLevel
   };
