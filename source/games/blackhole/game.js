@@ -61,6 +61,108 @@
     '你测到的质量，是它过去吃下的一切。',
     '最安静的地方，密度最大。'
   ];
+  // ---------------------------------------------------------------- 特殊事件
+  // 每过一个质量里程碑来一次，用来打破"解锁完之后就只剩看盘"
+  var EVENT_IDS = ['meteor', 'dense', 'cluster', 'ripple', 'lens', 'merge'];
+  function zoomOf(w) { return clamp(w.cam ? w.cam.scale : 1, SCALE_MIN, 1); }
+  function pushP(w, p) {
+    if (w.particles.length >= MAX_PARTICLES) return null;
+    w.particles.push(p);
+    return p;
+  }
+  function mkP(kind, x, y, vx, vy, r, m, heat) {
+    return { kind: kind, x: x, y: y, vx: vx, vy: vy, r: r, m: m, heat: heat,
+             life: 0, maxLife: 0, trail: [], seed: 0, dead: false, cloud: 0 };
+  }
+
+  // ① 流星雨：从同一个辐射点、几乎平行的方向扫进来
+  function evMeteor(w) {
+    var rad = rnd() * Math.PI * 2, dir = rnd() < 0.5 ? 1 : -1;
+    var n = 16 + Math.round(rnd() * 10);
+    for (var i = 0; i < n; i++) {
+      var a = rad + (rnd() - 0.5) * 0.5;
+      var d = (520 + rnd() * 200) / zoomOf(w);
+      var sp = 240 + rnd() * 200;
+      var tx = -Math.sin(a) * dir, ty = Math.cos(a) * dir;
+      var p = mkP('comet', w.bh.x + Math.cos(a) * d, w.bh.y + Math.sin(a) * d,
+                  (tx * 1.55 - Math.cos(a) * 0.85) * sp, (ty * 1.55 - Math.sin(a) * 0.85) * sp,
+                  1.5 + rnd() * 1.3, 2, 0.45);
+      pushP(w, p);
+    }
+    return { text: '特殊事件：流星雨', dur: 3.4 };
+  }
+
+  // ② 星云稠密区：背景变浓，并飘进来几团新的星云
+  function evDense(w) {
+    for (var i = 0; i < 3; i++) {
+      var a = rnd() * Math.PI * 2, d = (280 + rnd() * 260) / zoomOf(w);
+      var vc = circularSpeed(w, d) * 0.8, dir = rnd() < 0.5 ? 1 : -1;
+      var p = mkP('nebula', w.bh.x + Math.cos(a) * d, w.bh.y + Math.sin(a) * d,
+                  -Math.sin(a) * vc * dir, Math.cos(a) * vc * dir, 68 + rnd() * 46, 0, 0);
+      p.cloud = 1;
+      pushP(w, p);
+    }
+    w.denseNebula = 15;
+    return { text: '特殊事件：飘进了星云稠密区', dur: 4 };
+  }
+
+  // ③ 星团降临：一小团恒星整体落进来
+  function evCluster(w) {
+    var a = rnd() * Math.PI * 2, d = (560 + rnd() * 170) / zoomOf(w);
+    var cx = w.bh.x + Math.cos(a) * d, cy = w.bh.y + Math.sin(a) * d;
+    var vc = circularSpeed(w, d) * 0.88, dir = rnd() < 0.5 ? 1 : -1;
+    var bvx = -Math.sin(a) * vc * dir, bvy = Math.cos(a) * vc * dir;
+    for (var i = 0; i < 46; i++) {
+      var rr = Math.pow(rnd(), 0.5) * 110, aa = rnd() * Math.PI * 2;
+      pushP(w, mkP(rnd() < 0.22 ? 'planet' : 'star',
+                   cx + Math.cos(aa) * rr, cy + Math.sin(aa) * rr,
+                   bvx + (rnd() - 0.5) * 8, bvy + (rnd() - 0.5) * 8,
+                   2.4 + rnd() * 1.6, 6, 0.2));
+    }
+    return { text: '特殊事件：一团恒星落进来了', dur: 3.4 };
+  }
+
+  // ④ 引力波涟漪：几道扩张的波前扫过，顺手把盘搓一下
+  function evRipple(w) {
+    w.ripples = [];
+    for (var i = 0; i < 3; i++) w.ripples.push({ r: 70 + i * 120, life: 1 });
+    return { text: '特殊事件：一阵引力波涟漪扫过', dur: 3.4 };
+  }
+
+  // ⑤ 微引力透镜：一颗背景恒星被放大，阴影边缘亮起一小段弧
+  function evLens(w) {
+    w.lensStar = { a: rnd() * Math.PI * 2, t: 7, dur: 7 };
+    return { text: '特殊事件：一颗背景恒星被引力透镜放大', dur: 3.4 };
+  }
+
+  // ⑥ 并合：两颗小黑洞贴在一起进来，几步内并合
+  function evMerge(w) {
+    var a = rnd() * Math.PI * 2, d = (300 + rnd() * 180) / zoomOf(w);
+    var m1 = spawnMiniBH(w, true), m2 = spawnMiniBH(w, true);
+    if (!m1 || !m2) return { text: '特殊事件：小黑洞擦肩而过', dur: 3 };
+    var vc = circularSpeed(w, d) * 0.9, dir = rnd() < 0.5 ? 1 : -1;
+    m1.x = w.bh.x + Math.cos(a) * d; m1.y = w.bh.y + Math.sin(a) * d;
+    m2.x = m1.x + (m1.r + m2.r) * 0.75; m2.y = m1.y;
+    m1.vx = m2.vx = -Math.sin(a) * vc * dir;
+    m1.vy = m2.vy = Math.cos(a) * vc * dir;
+    return { text: '特殊事件：两个小黑洞正在并合', dur: 3.4 };
+  }
+
+  var EVENT_FN = { meteor: evMeteor, dense: evDense, cluster: evCluster,
+                   ripple: evRipple, lens: evLens, merge: evMerge };
+  function triggerMilestoneEvent(w) {
+    var pool = EVENT_IDS.filter(function (id) { return id !== w.lastEventId; });
+    var id = pool[Math.floor(rnd() * pool.length)] || EVENT_IDS[0];
+    w.lastEventId = id;
+    w.eventId = id;
+    w.eventSeq = (w.eventSeq || 0) + 1;
+    var r = EVENT_FN[id](w);
+    w.evT = r.dur + 1.6;          // 事件有自己的一行，不跟解锁提示抢位置
+    w.evText = r.text;
+    Sound.chime(true);
+    return id;
+  }
+
   var JET_R = 105, JET_PUSH = 1600;
   var ZEN_DIST = 2.4;           // 静观模式：把「视角远近」拨到多少（和滑块是同一个量）
   var SCALE_MIN = 0.18;         // 相机最远（越小看得越广）
@@ -218,6 +320,8 @@
       lastSpecial: {}, specialCount: { comet: 0, nebula: 0, minibh: 0 },
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
       phil: 0, philText: '', philBand: 0,
+      eventId: '', lastEventId: '', eventSeq: 0, ripples: [], denseNebula: 0, lensStar: null,
+      evText: '', evT: 0,
       unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
       cam: { scale: 1, x: W * 0.5, y: H * 0.5 }, camDist: 1,
       peak: 0
@@ -580,6 +684,19 @@
       p.vx += acc * dx * inv * dt;
       p.vy += acc * dy * inv * dt;
 
+      // 引力波涟漪扫过时，把盘轻轻搓一下（切向）
+      if (w.ripples && w.ripples.length) {
+        for (var rk = 0; rk < w.ripples.length; rk++) {
+          var rq = w.ripples[rk];
+          var gap = Math.abs(d - rq.r);
+          if (gap < 30) {
+            var kk = (30 - gap) * rq.life * 0.09 * dt * 60;
+            p.vx += -dy / (d > 1 ? d : 1) * kk;
+            p.vy += dx / (d > 1 ? d : 1) * kk;
+          }
+        }
+      }
+
       // 小黑洞：只用轻微摩擦，让它能绕着转一会儿再慢慢沉进去
       if (p.kind === 'minibh') {
         var mdamp = 1 - 0.035 * dt;
@@ -739,6 +856,19 @@
     }
     if (w.hint > 0) w.hint -= dt;
 
+    // --- 事件状态：涟漪扩张、星云稠密倒计时、透镜恒星淡出
+    if (w.ripples && w.ripples.length) {
+      for (var rj = w.ripples.length - 1; rj >= 0; rj--) {
+        var rp = w.ripples[rj];
+        rp.r += dt * 430;
+        rp.life = 1 - rp.r / 1500;
+        if (rp.life <= 0) w.ripples.splice(rj, 1);
+      }
+    }
+    if (w.denseNebula > 0) w.denseNebula -= dt;
+    if (w.evT > 0) w.evT -= dt;
+    if (w.lensStar) { w.lensStar.t -= dt; if (w.lensStar.t <= 0) w.lensStar = null; }
+
     // --- 每 +10000 质量：亮一下，并弹一句哲学留言
     var band = Math.floor(bh.mass / 10000);
     if (band > w.philBand) {
@@ -748,6 +878,7 @@
         w.phil = 9;
         w.philText = PHILOSOPHY[(band - 1) % PHILOSOPHY.length];
       }
+      triggerMilestoneEvent(w);               // 同时来一次特殊事件
       Sound.chime(true);
     }
     if (w.phil > 0) w.phil -= dt;
@@ -984,7 +1115,8 @@
       var nb = w.nebula[ni];
       var ng = ctx.createRadialGradient(nb.x, nb.y, 0, nb.x, nb.y, nb.r);
       ng.addColorStop(0, nb.c); ng.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.globalAlpha = 0.5; ctx.fillStyle = ng;
+      ctx.globalAlpha = 0.5 + clamp((w.denseNebula || 0) / 15, 0, 1) * 0.55;
+      ctx.fillStyle = ng;
       ctx.fillRect(nb.x - nb.r, nb.y - nb.r, nb.r * 2, nb.r * 2);
     }
     ctx.globalAlpha = 1;
@@ -1023,6 +1155,22 @@
     var heat = clamp(w.rateAvg / 12 + w.pulseFlare * 0.5, 0, 1);
     drawLensedDisk(w, ctx, heat);      // 引力透镜恒定开启
 
+    // 引力波涟漪：几道扩张的波前
+    if (w.ripples && w.ripples.length) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (var rv = 0; rv < w.ripples.length; rv++) {
+        var rq2 = w.ripples[rv];
+        var rl = clamp(rq2.life, 0, 1);
+        ctx.strokeStyle = 'rgba(196,222,255,' + (0.46 * rl).toFixed(3) + ')';
+        ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.arc(bh.x, bh.y, rq2.r, 0, 6.2832); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,196,154,' + (0.22 * rl).toFixed(3) + ')';
+        ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.arc(bh.x, bh.y, rq2.r * 0.982, 0, 6.2832); ctx.stroke();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
     // 粒子。喷流分两批画：下半段（背离观察者）在这里画，会被盘和阴影挡住
     for (var pi = 0; pi < w.particles.length; pi++) {
       var p = w.particles[pi];
@@ -1045,6 +1193,27 @@
     ctx.fillStyle = ring;
     ctx.beginPath(); ctx.arc(bh.x, bh.y, shadow * 1.7, 0, 6.2832); ctx.fill();
     ctx.globalCompositeOperation = 'source-over';
+
+    // 微引力透镜：阴影边缘亮起一小段弧，像一颗背景恒星被拉成了环
+    if (w.lensStar) {
+      var ls = w.lensStar;
+      var lp = Math.sin(clamp(ls.t / ls.dur, 0, 1) * Math.PI);       // 0→1→0
+      var lr = shadow * 1.06;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(214,236,255,' + (0.75 * lp).toFixed(3) + ')';
+      ctx.lineWidth = 3.2;
+      ctx.beginPath();
+      ctx.ellipse(bh.x, bh.y, lr, lr, 0, ls.a - 0.5, ls.a + 0.5);
+      ctx.stroke();
+      var lx = bh.x + Math.cos(ls.a) * lr, ly = bh.y + Math.sin(ls.a) * lr;
+      var lg = ctx.createRadialGradient(lx, ly, 0, lx, ly, shadow * 0.5);
+      lg.addColorStop(0, 'rgba(255,255,255,' + (0.85 * lp).toFixed(3) + ')');
+      lg.addColorStop(0.35, 'rgba(180,220,255,' + (0.40 * lp).toFixed(3) + ')');
+      lg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = lg;
+      ctx.beginPath(); ctx.arc(lx, ly, shadow * 0.5, 0, 6.2832); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
 
     // 上半段喷流：画在阴影之后，所以不会被遮挡，一直射出屏幕
     for (var pk = 0; pk < w.particles.length; pk++) {
@@ -1158,6 +1327,17 @@
       ctx.font = '600 17px -apple-system, "Noto Sans CJK SC", sans-serif';
       ctx.fillStyle = 'rgba(255,230,190,0.92)';
       ctx.fillText(w.hintText, W / 2, 104);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'left';
+    }
+
+    // 特殊事件：单独一行，带个小标记
+    if (w.evT > 0 && w.evText) {
+      ctx.globalAlpha = clamp(w.evT, 0, 1);
+      ctx.textAlign = 'center';
+      ctx.font = '600 16px -apple-system, "Noto Sans CJK SC", sans-serif';
+      ctx.fillStyle = 'rgba(176,214,255,0.95)';
+      ctx.fillText('◈ ' + w.evText, W / 2, 132);
       ctx.globalAlpha = 1;
       ctx.textAlign = 'left';
     }
@@ -1401,6 +1581,31 @@
     if (mode === 'menu') { startGame(false); return; }
     if (game) spawnCluster(game, 80);
   });
+  // 暂停时轮换的文案（每次暂停换一句，不重样）
+  var PAUSE_LINES = [
+    '深呼吸，或者不深呼吸。',
+    '这里的钟停了，外面的没有。',
+    '它跑不掉，你也别急。',
+    '引力不需要你盯着才生效。',
+    '什么都不做，也是一种轨道。',
+    '你刚才吃掉的东西，正在变成面积。',
+    '松一下肩膀——它比吸积盘更早塌缩。',
+    '慢慢来，光都要走很久。',
+    '熵还在涨，只是你看不见。',
+    '暂停不是停止，是绕远一点。',
+    '一切都会落到中心，包括注意力。',
+    '此刻没有事件，只有视界。',
+    '让盘自己转一会儿。',
+    '你随时可以继续，也随时可以先发呆。'
+  ];
+  var pauseIdx = Math.floor(Math.random() * PAUSE_LINES.length);
+  function nextPauseLine() {
+    pauseIdx = (pauseIdx + 1) % PAUSE_LINES.length;
+    var el = $('pause-line');
+    if (el) el.textContent = PAUSE_LINES[pauseIdx];
+    return PAUSE_LINES[pauseIdx];
+  }
+
   var preZenDist = 1;
   function toggleZen(on) {
     if (!game) return;
@@ -1450,7 +1655,7 @@
   });
   $('btn-reset').addEventListener('click', function () { resetGame(); });
   function togglePause() {
-    if (mode === 'play') { mode = 'pause'; if (game) game.paused = true; show('pause'); }
+    if (mode === 'play') { mode = 'pause'; if (game) game.paused = true; nextPauseLine(); show('pause'); }
     else if (mode === 'pause') { mode = 'play'; if (game) game.paused = false; show(null); }
   }
 
@@ -1524,6 +1729,21 @@
       ' eaten=' + game.eaten + ' minis=' + (game.minis ? game.minis.length : 0) +
       ' time=' + game.time.toFixed(0) + ' rate=' + game.rate.toFixed(1) + ' rateAvg=' + game.rateAvg.toFixed(1) +
       ' target=' + Math.round(TARGET_POP / Math.pow(clamp(game.cam.scale, SCALE_MIN, 1), 1.15));
+    }
+    if (params.has('event')) {
+      var evId = params.get('event');
+      if (EVENT_FN[evId]) {
+        var evR = EVENT_FN[evId](game);
+        game.evText = evR.text; game.evT = evR.dur + 1.6;
+        for (var evS = 0; evS < 120 * (parseFloat(params.get('evt') || '1.2')); evS++) {
+          stepWorld(game, FIXED, { pointerX: null, pointerY: null, auto: true });
+        }
+      }
+    }
+    if (params.has('pause')) {
+      mode = 'pause'; game.paused = true;
+      nextPauseLine(); nextPauseLine();
+      show('pause');
     }
     if (params.has('phil')) {
       var pIdx = parseInt(params.get('phil'), 10) || 0;
@@ -2167,6 +2387,125 @@
     try { wP.phil = 5; renderWorld(wP, ctx); } catch (e) { pErr = e.message; }
     check('留言渲染不报错', pErr === '', pErr);
 
+    // 35) 里程碑特殊事件
+    check('事件表有 6 种', EVENT_IDS.length === 6, EVENT_IDS.join('/'));
+    check('每种事件都有实现', EVENT_IDS.every(function (id) { return typeof EVENT_FN[id] === 'function'; }));
+
+    // ① 流星雨：同一辐射点、方向几乎平行
+    var wE = createWorld(5501);
+    wE.particles.length = 0;
+    evMeteor(wE);
+    var met = wE.particles.filter(function (p) { return p.kind === 'comet'; });
+    check('流星雨会撒下一批流星', met.length >= 16, met.length + ' 颗');
+    check('流星几乎朝同一个方向（辐射点）', (function () {
+      if (met.length < 4) return false;
+      var ax = 0, ay = 0;
+      for (var i = 0; i < met.length; i++) { ax += met[i].vx; ay += met[i].vy; }
+      var al = Math.hypot(ax, ay) || 1; ax /= al; ay /= al;
+      var worst = 1;
+      for (i = 0; i < met.length; i++) {
+        var l = Math.hypot(met[i].vx, met[i].vy) || 1;
+        worst = Math.min(worst, (met[i].vx * ax + met[i].vy * ay) / l);
+      }
+      return worst > 0.8;
+    })());
+    for (var smt = 0; smt < 120 * 2; smt++) stepWorld(wE, FIXED, {});
+    check('流星会拖出尾巴', met.length > 0 && met[0].trail.length > 3, met.length ? met[0].trail.length + ' 段' : '没了');
+
+    // ② 星云稠密区
+    var wE2 = createWorld(5502);
+    wE2.particles.length = 0;
+    var nNebBefore = wE2.particles.filter(function (p) { return p.kind === 'nebula'; }).length;
+    evDense(wE2);
+    var nNebAfter = wE2.particles.filter(function (p) { return p.kind === 'nebula'; }).length;
+    check('稠密区会飘进新的星云团', nNebAfter - nNebBefore >= 3, '+' + (nNebAfter - nNebBefore) + ' 团');
+    check('稠密区会持续一段时间', wE2.denseNebula > 5, wE2.denseNebula.toFixed(1) + ' 秒');
+
+    // ③ 星团降临
+    var wE3 = createWorld(5503);
+    wE3.particles.length = 0;
+    evCluster(wE3);
+    var stars = wE3.particles.filter(function (p) { return p.kind === 'star' || p.kind === 'planet'; });
+    check('星团会一次落进来很多恒星', stars.length >= 40, stars.length + ' 颗');
+    check('它们挤在一小团里', (function () {
+      var cx = 0, cy = 0, i;
+      for (i = 0; i < stars.length; i++) { cx += stars[i].x; cy += stars[i].y; }
+      cx /= stars.length; cy /= stars.length;
+      for (i = 0; i < stars.length; i++) if (Math.hypot(stars[i].x - cx, stars[i].y - cy) > 160) return false;
+      return true;
+    })());
+
+    // ④ 引力波涟漪：会扩张，并且真的把盘搓动
+    var wE4 = createWorld(5504);
+    wE4.particles.length = 0;
+    evRipple(wE4);
+    check('涟漪有 3 道波前', wE4.ripples.length === 3);
+    var r0 = wE4.ripples[0].r;
+    var probe = { kind: 'dust', x: wE4.bh.x + 200, y: wE4.bh.y, vx: 0, vy: 0, r: 2, m: 1, heat: 0,
+                  life: 0, maxLife: 0, trail: [], seed: 1, dead: false, cloud: 0 };
+    wE4.particles.push(probe);
+    for (var srv = 0; srv < 120 * 0.6; srv++) stepWorld(wE4, FIXED, {});
+    check('涟漪会向外扩张', wE4.ripples.length > 0 && wE4.ripples[0].r > r0, r0.toFixed(0) + ' → ' + (wE4.ripples[0] ? wE4.ripples[0].r.toFixed(0) : '散完'));
+    check('涟漪扫过时会把盘搓一下（切向速度）', Math.abs(probe.vy) > 3 || probe.dead, 'vy=' + probe.vy.toFixed(1));
+    for (var srv2 = 0; srv2 < 120 * 12; srv2++) stepWorld(wE4, FIXED, {});
+    check('涟漪会自己消失', wE4.ripples.length === 0);
+
+    // ⑤ 微引力透镜
+    var wE5 = createWorld(5505);
+    evLens(wE5);
+    check('透镜事件会生成一颗被放大的背景星', !!wE5.lensStar && wE5.lensStar.t > 0);
+    var lErr = '';
+    try { renderWorld(wE5, ctx); } catch (e) { lErr = e.message; }
+    check('透镜渲染不报错', lErr === '', lErr);
+    for (var sls = 0; sls < 120 * 9; sls++) stepWorld(wE5, FIXED, {});
+    check('透镜事件会自己结束', !wE5.lensStar);
+
+    // ⑥ 并合事件
+    var wE6 = createWorld(5506);
+    wE6.particles.length = 0;
+    evMerge(wE6);
+    var mBefore2 = wE6.particles.filter(function (p) { return p.kind === 'minibh'; }).length;
+    for (var smg = 0; smg < 40; smg++) stepWorld(wE6, FIXED, {});
+    var mAfter2 = wE6.particles.filter(function (p) { return p.kind === 'minibh' && !p.dead; });
+    check('并合事件会先放进两颗小黑洞', mBefore2 === 2, mBefore2 + ' 颗');
+    check('然后它们会并成一个', mAfter2.length === 1, mAfter2.length + ' 颗');
+
+    // 里程碑会触发事件，且不会连着重样
+    var wEv = createWorld(5600);
+    var seenIds = [];
+    for (var band2 = 1; band2 <= 8; band2++) {
+      wEv.bh.mass = band2 * 10000 + 500;
+      var beforeSeq = wEv.eventSeq;
+      stepWorld(wEv, FIXED, {});
+      if (wEv.eventSeq > beforeSeq) seenIds.push(wEv.eventId);
+    }
+    check('每次过里程碑都会触发事件', seenIds.length === 8, seenIds.length + ' 次');
+    check('事件不会连着两次一样', (function () {
+      for (var i = 1; i < seenIds.length; i++) if (seenIds[i] === seenIds[i - 1]) return false;
+      return true;
+    })(), seenIds.join(' → '));
+    check('事件提示会显示出来', /特殊事件/.test(wEv.evText) && wEv.evT > 0, wEv.evText);
+
+    // 36) 暂停文案轮换
+    check('暂停文案有 8 句以上', PAUSE_LINES.length >= 8, PAUSE_LINES.length + ' 句');
+    check('暂停文案互不重复', (function () {
+      var seen = {};
+      for (var i = 0; i < PAUSE_LINES.length; i++) { if (seen[PAUSE_LINES[i]]) return false; seen[PAUSE_LINES[i]] = 1; }
+      return true;
+    })());
+    check('暂停文案都短（≤ 20 字）', PAUSE_LINES.every(function (t) { return t.length <= 20; }),
+          '最长 ' + Math.max.apply(null, PAUSE_LINES.map(function (t) { return t.length; })) + ' 字');
+    var seqOfLines = [];
+    for (var pl2 = 0; pl2 < 5; pl2++) seqOfLines.push(nextPauseLine());
+    check('每次暂停都会换一句', (function () {
+      for (var i = 1; i < seqOfLines.length; i++) if (seqOfLines[i] === seqOfLines[i - 1]) return false;
+      return true;
+    })(), seqOfLines[0] + ' → ' + seqOfLines[1]);
+    check('文案写进了 DOM', (function () {
+      var el = document.getElementById('pause-line');
+      return !!el && el.textContent === seqOfLines[seqOfLines.length - 1];
+    })());
+
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
     document.title = (results.pass ? 'SELFTEST PASS' : 'SELFTEST FAIL') + ' ' +
@@ -2186,6 +2525,8 @@
     createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
     pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
     toggleZen: toggleZen, spawnMiniBH: spawnMiniBH, miniStats: miniStats, dissolveNebula: dissolveNebula,
+    evMeteor: evMeteor, evDense: evDense, evCluster: evCluster, evRipple: evRipple, evLens: evLens, evMerge: evMerge,
+    triggerMilestoneEvent: triggerMilestoneEvent, nextPauseLine: nextPauseLine,
     renderWorld: renderWorld, getTilt: getTilt, getSquash: getSquash, particleSquash: particleSquash,
     getCamDist: getCamDist, setCamDist: setCamDist,
     jetProj: jetProj,

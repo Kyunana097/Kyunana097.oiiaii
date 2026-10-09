@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>黑洞 · 吞噬 — Kyunana的栈</title>
 <meta name="description" content="一个可以躺着玩的解压小游戏：拖动黑洞，让恒星、尘埃和行星落进它的吸积盘。">
-<link rel="stylesheet" href="style.css?v=10">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <div id="wrap">
@@ -47,7 +47,7 @@
     </section>
     <section class="overlay hidden" id="ov-pause">
       <h2>暂停中</h2>
-      <p class="lead">黑洞在等你。它很有耐心。</p>
+      <p class="lead" id="pause-line">深呼吸，或者不深呼吸。</p>
       <div class="row">
         <button id="btn-resume" class="primary">继续</button>
         <button id="btn-reset" class="ghost">重新开始</button>
@@ -107,6 +107,6 @@
 </div>
 
 <div id="selftest" hidden></div>
-<script src="game.js?v=10"></script>
+<script src="game.js?v=11"></script>
 </body>
 </html>
