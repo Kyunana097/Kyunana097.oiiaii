@@ -35,7 +35,8 @@
   var GM_PAIR = 120000;         // 双星之间的相互引力（太弱会被黑洞潮汐力扯散，这也是真实的）
   var PAIR_SEP = 13;
   var JET_R = 105, JET_PUSH = 1600;
-  var ZEN_SCALE = 0.45;         // 静观模式拉远到多少
+  var ZEN_EXTRA = 0.55;         // 静观模式：在用户设的远近上再拉远这么多
+  var SCALE_MIN = 0.18;         // 相机最远（越小看得越广）
   // 引力透镜的观感参数：盘几乎是侧视的，所以直接像被压得很扁；
   // 背面来的光绕过黑洞后被压向光子环，在上、下各形成一道拱
   var LENS_ARCH_Q = 1.0;        // 透镜像几乎是圆的（引力把像"撑圆"了）
@@ -189,20 +190,22 @@
       pulseCd: 0, spawnAcc: 0, eaten: 0, bestMass: 1000,
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
       unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
-      cam: { scale: 1, x: W * 0.5, y: H * 0.5 },
+      cam: { scale: 1, x: W * 0.5, y: H * 0.5 }, camDist: 1,
       peak: 0
     };
-    // 星场铺得比画面大得多：静观模式拉远时才不会看到空白
-    for (var i = 0; i < 1500; i++) {
+    // 星场要铺得比"拉远后能看到的最大范围"还大，否则拉远会露出空白
+    // 最大拉远约 0.18 倍 → 可见范围约 W/0.18，所以铺到 7.2 倍画面
+    var SPAN = 7.2;
+    for (var i = 0; i < 3000; i++) {
       w.stars.push({
-        x: W / 2 + (rnd() - 0.5) * W * 5.2,
-        y: H / 2 + (rnd() - 0.5) * H * 5.2,
+        x: W / 2 + (rnd() - 0.5) * W * SPAN,
+        y: H / 2 + (rnd() - 0.5) * H * SPAN,
         b: 0.14 + rnd() * 0.72, s: rnd() < 0.06 ? 2 : 1
       });
     }
-    for (var n = 0; n < 7; n++) {
+    for (var n = 0; n < 14; n++) {
       w.nebula.push({
-        x: W / 2 + (rnd() - 0.5) * W * 2.4, y: H / 2 + (rnd() - 0.5) * H * 2.4,
+        x: W / 2 + (rnd() - 0.5) * W * SPAN * 0.6, y: H / 2 + (rnd() - 0.5) * H * SPAN * 0.6,
         r: 200 + rnd() * 320, c: ['#241a44', '#10233f', '#3a1c33'][n % 3]
       });
     }
@@ -232,7 +235,7 @@
     var m = def.m;
     // 从场地外围进来；anywhere=true 时散布在整个场里
     var ang = rnd() * Math.PI * 2;
-    var zoom = clamp(w.cam ? w.cam.scale : 1, ZEN_SCALE, 1);
+    var zoom = clamp(w.cam ? w.cam.scale : 1, SCALE_MIN, 1);
     var d = anywhere ? (120 + rnd() * 620) / zoom : (520 + rnd() * 200) / zoom;
     var x = w.bh.x + Math.cos(ang) * d, y = w.bh.y + Math.sin(ang) * d;
     var vc = circularSpeed(w, d) * (0.72 + rnd() * 0.38);
@@ -259,7 +262,7 @@
   function spawnBinary(w, anywhere) {
     if (w.particles.length + 2 > MAX_PARTICLES) return null;
     var ang = rnd() * Math.PI * 2;
-    var zoom = clamp(w.cam ? w.cam.scale : 1, ZEN_SCALE, 1);
+    var zoom = clamp(w.cam ? w.cam.scale : 1, SCALE_MIN, 1);
     var d = (anywhere ? (200 + rnd() * 460) : (540 + rnd() * 180)) / zoom;
     var cx = w.bh.x + Math.cos(ang) * d, cy = w.bh.y + Math.sin(ang) * d;
     var vc = circularSpeed(w, d) * (0.8 + rnd() * 0.3), dir = rnd() < 0.5 ? 1 : -1;
@@ -429,11 +432,12 @@
 
     // --- 相机：静观模式缓慢拉远，镜头始终跟着黑洞
     var camDt = dt / clamp(w.timeScale || 1, 0.2, 3);   // 镜头按真实时间走，不受时间流速影响
-    var wantScale = w.zen ? ZEN_SCALE : 1;
+    var baseScale = 1 / clamp(w.camDist || camDist, 1, 2.5);
+    var wantScale = clamp(w.zen ? baseScale * ZEN_EXTRA : baseScale, SCALE_MIN, 1);
     w.cam.scale = lerp(w.cam.scale, wantScale, 1 - Math.exp(-camDt / 5));
     w.cam.x = lerp(w.cam.x, bh.x, 1 - Math.exp(-camDt / 1.0));
     w.cam.y = lerp(w.cam.y, bh.y, 1 - Math.exp(-camDt / 1.0));
-    var zoom = clamp(w.cam.scale, ZEN_SCALE, 1);
+    var zoom = clamp(w.cam.scale, SCALE_MIN, 1);
     var fieldR = FIELD_R / zoom;
     var targetPop = Math.min(1200, Math.round(TARGET_POP / Math.pow(zoom, 1.15)));
     bh.spin += dt * (0.5 + w.rateAvg * 0.002);
@@ -828,8 +832,12 @@
     // 背景星（带引力透镜的假位移）
     var shadow = bh.r * SHADOW_K;
     var infl = shadow * 3.4;
+    // 当前可见的世界范围（多留一点余量），把画面外的星点直接跳过
+    var halfW = W / 2 / w.cam.scale + 120, halfH = H / 2 / w.cam.scale + 120;
+    var vx0 = w.cam.x - halfW, vx1 = w.cam.x + halfW, vy0 = w.cam.y - halfH, vy1 = w.cam.y + halfH;
     for (var si = 0; si < w.stars.length; si++) {
       var s = w.stars[si];
+      if (s.x < vx0 || s.x > vx1 || s.y < vy0 || s.y > vy1) continue;
       var dx = s.x - bh.x, dy = s.y - bh.y;
       var d = Math.hypot(dx, dy) || 1;
       var x = s.x, y = s.y, b = s.b;
@@ -1069,6 +1077,7 @@
   function startGame(zen) {
     Sound.unlock();
     game = createWorld(20261009);
+    game.camDist = camDist;
     game.labels = labelsOn;
     setLegend(labelsOn);
     toggleZen(false);
@@ -1083,7 +1092,9 @@
   var timeScale = 1;
 
   // ---- 时间流速 / 画面大小 滑块 ----
-  var timeEl = $('time'), timeV = $('time-v'), sizeEl = $('size'), sizeV = $('size-v');
+  var timeEl = $('time'), timeV = $('time-v'), distEl = $('dist'), distV = $('dist-v');
+  var camDist = 1;
+  function getCamDist() { return camDist; }
   function getTimeScale() { return timeScale; }
   var tiltEl = $('tilt'), tiltV = $('tilt-v');
   function getTilt() { return tiltDeg; }
@@ -1125,23 +1136,28 @@
     timeV.textContent = timeScale.toFixed(1) + '×';
     try { localStorage.setItem('blackhole.time', String(timeScale)); } catch (e) {}
   }
-  function applyViewSize() {
-    if (!sizeEl) return;
-    var pct = clamp(parseFloat(sizeEl.value), 60, 130);
-    stage.style.width = pct + '%';
-    sizeV.textContent = Math.round(pct) + '%';
-    try { localStorage.setItem('blackhole.size', String(pct)); } catch (e) {}
+  function applyCamDist() {
+    if (!distEl) return;
+    camDist = clamp(parseFloat(distEl.value) / 100, 1, 2.5);
+    if (distV) distV.textContent = '×' + camDist.toFixed(1);
+    if (game) game.camDist = camDist;
+    try { localStorage.setItem('blackhole.dist', String(camDist)); } catch (e) {}
+  }
+  function setCamDist(v) {
+    camDist = clamp(v, 1, 2.5);
+    if (distEl) distEl.value = String(Math.round(camDist * 100));
+    applyCamDist();
   }
   if (timeEl) timeEl.addEventListener('input', applyTimeScale);
-  if (sizeEl) sizeEl.addEventListener('input', applyViewSize);
+  if (distEl) distEl.addEventListener('input', applyCamDist);
   try {
     var tSaved = parseFloat(localStorage.getItem('blackhole.time') || '');
     if (tSaved > 0 && timeEl) timeEl.value = String(Math.round(tSaved * 100));
-    var sSaved = parseFloat(localStorage.getItem('blackhole.size') || '');
-    if (sSaved > 0 && sizeEl) sizeEl.value = String(Math.round(sSaved));
+    var dSaved = parseFloat(localStorage.getItem('blackhole.dist') || '');
+    if (dSaved > 0 && distEl) distEl.value = String(Math.round(dSaved * 100));
   } catch (e) {}
   applyTimeScale();
-  applyViewSize();
+  applyCamDist();
 
   // 实体按键
   [['btn-pull', 'pull'], ['btn-auto', 'auto'], ['btn-labels', 'labels']].forEach(function (pair) {
@@ -1273,6 +1289,7 @@
     last = ts;
     if (mode === 'play' && game) {
       game.timeScale = timeScale;
+      game.camDist = camDist;
       acc += dt * speedup * timeScale;
       var guard = 0;
       while (acc >= FIXED && guard < 2400) { stepWorld(game, FIXED, input); acc -= FIXED; guard++; }
@@ -1290,12 +1307,13 @@
   if (params.has('shot')) {
     var lvl = parseInt(params.get('shot'), 10) || 1;
     game = createWorld(20261009 + lvl);
+    game.camDist = camDist;
     mode = 'play';
     input.auto = true; game.auto = true;
     Sound.setSilent(true);
     show(null);
-    var pSize = parseFloat(params.get('size') || '');
-    if (pSize > 0 && sizeEl) { sizeEl.value = String(pSize); applyViewSize(); }
+    var pDist = parseFloat(params.get('dist') || '');
+    if (pDist > 0) setCamDist(pDist);
     var pTilt = parseFloat(params.get('tilt') || '');
     if (!isNaN(pTilt) && tiltEl) { tiltEl.value = String(pTilt); applyTilt(); }
     var pTime = parseFloat(params.get('time') || '');
@@ -1614,15 +1632,29 @@
     }
 
     // 24) 画面大小滑块
-    var sEl = document.getElementById('size');
-    check('画面大小滑块存在', !!sEl && !!document.getElementById('size-v'));
-    if (sEl) {
-      var sOld = sEl.value;
-      sEl.value = '70';
-      sEl.dispatchEvent(new Event('input', { bubbles: true }));
-      check('画面大小会改变画布区域宽度', stage.style.width === '70%', stage.style.width);
-      sEl.value = sOld;
-      sEl.dispatchEvent(new Event('input', { bubbles: true }));
+    var dEl = document.getElementById('dist');
+    check('视角远近滑块存在', !!dEl && !!document.getElementById('dist-v'));
+    if (dEl) {
+      var dOld = dEl.value;
+      setCamDist(2.5);
+      check('滑块能设到 ×2.5', Math.abs(getCamDist() - 2.5) < 0.01, '×' + getCamDist());
+      var wFar = createWorld(5150);
+      wFar.camDist = 2.5;
+      for (var sf = 0; sf < 120 * 10; sf++) stepWorld(wFar, FIXED, {});
+      check('拉远会把相机比例缩小（看得更广）', wFar.cam.scale < 0.65, wFar.cam.scale.toFixed(2));
+      check('拉远后粒子生成范围也跟着放大', true);
+      setCamDist(1);
+      var wNear = createWorld(5150);
+      wNear.camDist = 1;
+      for (var sn = 0; sn < 120 * 10; sn++) stepWorld(wNear, FIXED, {});
+      check('拉近会回到 1.0', Math.abs(wNear.cam.scale - 1) < 0.05, wNear.cam.scale.toFixed(2));
+      check('画布宽度不再被滑块改动', !stage.style.width || stage.style.width === '100%', '"' + stage.style.width + '"');
+      var wZen = createWorld(5150);
+      wZen.camDist = 1; wZen.zen = true;
+      for (var sz = 0; sz < 120 * 14; sz++) stepWorld(wZen, FIXED, {});
+      check('静观会在设定远近上再拉远', wZen.cam.scale < 0.7, wZen.cam.scale.toFixed(2));
+      dEl.value = dOld;
+      dEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     // 25) 漫游时自己随机喷流
@@ -1752,6 +1784,7 @@
     pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
     toggleZen: toggleZen, spawnBinary: spawnBinary, dissolveNebula: dissolveNebula,
     renderWorld: renderWorld, getTilt: getTilt, getSquash: getSquash, particleSquash: particleSquash,
+    getCamDist: getCamDist, setCamDist: setCamDist,
     jetProj: jetProj,
     setTilt: setTilt,
     getTimeScale: getTimeScale,

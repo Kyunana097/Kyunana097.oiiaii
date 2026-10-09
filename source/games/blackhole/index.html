@@ -37,7 +37,7 @@
         <div><b>点「撒星星」</b>＝往场上丢一把新的尘埃和恒星</div>
         <div><b>「自动漫游」</b>＝放手，让它自己游过去吃（这时鼠标不接管）</div>
         <div><b>「静观」</b>＝镜头慢慢拉远，看着吸积盘自己转；点一下画面退出</div>
-        <div><b>时间流速 / 画面大小</b>＝画面下方的两个滑块，随时调</div>
+        <div><b>时间流速 / 视角远近</b>＝画面下方的滑块，随时调（拉远能看见更大的范围）</div>
       </div>
       <div class="row">
         <button id="btn-start" class="primary">开始</button>
@@ -62,9 +62,9 @@
       <b id="time-v">1.0×</b>
     </label>
     <label class="slider">
-      <span>画面大小</span>
-      <input id="size" type="range" min="60" max="130" step="5" value="100" aria-label="画面大小">
-      <b id="size-v">100%</b>
+      <span>视角远近</span>
+      <input id="dist" type="range" min="100" max="250" step="5" value="100" aria-label="视角远近（相机距离）">
+      <b id="dist-v">×1.0</b>
     </label>
     <label class="slider">
       <span>视角</span>
