@@ -66,6 +66,16 @@
       <input id="size" type="range" min="60" max="130" step="5" value="100" aria-label="画面大小">
       <b id="size-v">100%</b>
     </label>
+    <label class="slider">
+      <span>视角</span>
+      <input id="tilt" type="range" min="0" max="80" step="1" value="0" aria-label="视角（倾角）">
+      <b id="tilt-v">0°</b>
+    </label>
+    <div class="presets">
+      <button id="tilt-top" class="mini on" type="button">俯视版</button>
+      <button id="tilt-side" class="mini" type="button">侧视版</button>
+      <span class="dim">同一套代码，两个视角</span>
+    </div>
     <label class="check">
       <input id="lens" type="checkbox" checked>
       <span>引力透镜</span>
