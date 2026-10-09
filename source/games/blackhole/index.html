@@ -13,10 +13,6 @@
   <header id="bar">
     <a id="back" href="/lab.html" title="回到我的小站">← 我的小站</a>
     <h1>黑洞 <span>吞噬</span></h1>
-    <div id="bar-btns">
-      <button id="btn-sound" class="ghost" aria-pressed="true" title="声音开关 (M)">🔊</button>
-      <button id="btn-pause" class="ghost" title="暂停 (P)">❚❚</button>
-    </div>
   </header>
 
   <div id="hud">
@@ -41,10 +37,11 @@
         <div><b>点「撒星星」</b>＝往场上丢一把新的尘埃和恒星</div>
         <div><b>「自动漫游」</b>＝放手，让它自己游过去吃（这时鼠标不接管）</div>
         <div><b>「静观」</b>＝镜头慢慢拉远，看着吸积盘自己转；点一下画面退出</div>
+        <div><b>时间流速 / 画面大小</b>＝画面下方的两个滑块，随时调</div>
       </div>
       <div class="row">
         <button id="btn-start" class="primary">开始</button>
-        <button id="btn-zen" class="ghost">自动漫游着看</button>
+        <button id="btn-zen-start" class="ghost">自动漫游着看</button>
       </div>
       <p class="tiny">行星靠近到洛希极限以内会被潮汐力撕成一条碎片流；越靠近视界，粒子越热、越亮。质量涨上去还会陆续解锁<b>彗星</b>（拖着长尾）、<b>星云团</b>（靠近会散成一片尘埃）和<b>双星</b>（互相绕着转，吃掉一颗另一颗会被甩出去）。</p>
     </section>
@@ -56,6 +53,19 @@
         <button id="btn-reset" class="ghost">重新开始</button>
       </div>
     </section>
+  </div>
+
+  <div id="controls">
+    <label class="slider">
+      <span>时间流速</span>
+      <input id="time" type="range" min="20" max="300" step="10" value="100" aria-label="时间流速">
+      <b id="time-v">1.0×</b>
+    </label>
+    <label class="slider">
+      <span>画面大小</span>
+      <input id="size" type="range" min="60" max="130" step="5" value="100" aria-label="画面大小">
+      <b id="size-v">100%</b>
+    </label>
   </div>
 
   <div id="legend">

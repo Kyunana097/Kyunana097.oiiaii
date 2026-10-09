@@ -32,7 +32,7 @@
     nebula: { r0: 15, r1: 26,  m: 0,  color: '#a98ce0' },
     binary: { r0: 3.0, r1: 4.0, m: 10, color: '#ffd8a0' }
   };
-  var GM_PAIR = 36000;          // 双星之间的相互引力
+  var GM_PAIR = 120000;         // 双星之间的相互引力（太弱会被黑洞潮汐力扯散，这也是真实的）
   var PAIR_SEP = 13;
   var JET_R = 105, JET_PUSH = 1600;
   var ZEN_SCALE = 0.45;         // 静观模式拉远到多少
@@ -150,6 +150,7 @@
         noise(0.34, 0.06, 1800, 0.7);
         tone(320, 0.42, 'sawtooth', 0.028, 60);
       },
+      jet: function () { noise(0.55, 0.04, 820, 0.55); tone(74, 0.6, 'triangle', 0.035, 300); },
       pulse: function () { tone(46, 0.9, 'sine', 0.07, 120); noise(0.5, 0.03, 260, 0.5); },
       chime: function (hi) { tone(hi ? 660 : 440, 0.5, 'sine', 0.035); setTimeout(function () { tone(hi ? 880 : 554, 0.6, 'sine', 0.03); }, 160); }
     };
@@ -167,7 +168,7 @@
       labels: true, pull: false, pulseFlare: 0,
       pulseCd: 0, spawnAcc: 0, eaten: 0, bestMass: 1000,
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
-      unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0,
+      unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
       cam: { scale: 1, x: W * 0.5, y: H * 0.5 },
       peak: 0
     };
@@ -400,10 +401,11 @@
     bh.y = lerp(bh.y, bh.ty, follow);
 
     // --- 相机：静观模式缓慢拉远，镜头始终跟着黑洞
+    var camDt = dt / clamp(w.timeScale || 1, 0.2, 3);   // 镜头按真实时间走，不受时间流速影响
     var wantScale = w.zen ? ZEN_SCALE : 1;
-    w.cam.scale = lerp(w.cam.scale, wantScale, 1 - Math.exp(-dt / 5));
-    w.cam.x = lerp(w.cam.x, bh.x, 1 - Math.exp(-dt / 1.0));
-    w.cam.y = lerp(w.cam.y, bh.y, 1 - Math.exp(-dt / 1.0));
+    w.cam.scale = lerp(w.cam.scale, wantScale, 1 - Math.exp(-camDt / 5));
+    w.cam.x = lerp(w.cam.x, bh.x, 1 - Math.exp(-camDt / 1.0));
+    w.cam.y = lerp(w.cam.y, bh.y, 1 - Math.exp(-camDt / 1.0));
     var zoom = clamp(w.cam.scale, ZEN_SCALE, 1);
     var fieldR = FIELD_R / zoom;
     var targetPop = Math.min(1200, Math.round(TARGET_POP / Math.pow(zoom, 1.15)));
@@ -506,6 +508,18 @@
       spawnParticle(w, pickKind(w), false);
     }
     if (w.spawnAcc > 4) w.spawnAcc = 0;
+
+    // --- 漫游时自己随机来一发喷流
+    if (w.auto) {
+      w.autoJetTimer -= dt;
+      if (w.autoJetTimer <= 0) {
+        w.autoJetTimer = 5 + rnd() * 9;
+        fireJets(w, 0.5 + rnd() * 0.7);
+        w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 2, max: 300, life: 1, color: '#bfe6ff' });
+        w.autoJets = (w.autoJets || 0) + 1;
+        if (w.isMain) Sound.jet();
+      }
+    }
 
     // --- 喷流把附近物质吹开（不然喷流只是个装饰）
     w.jetWindAcc += dt;
@@ -856,7 +870,7 @@
   var stage = $('stage'), selftestEl = $('selftest');
   var els = {
     mass: $('hud-mass'), eaten: $('hud-eaten'), rs: $('hud-rs'), rate: $('hud-rate'), disk: $('disk'),
-    ovStart: $('ov-start'), ovPause: $('ov-pause'), btnSound: $('btn-sound')
+    ovStart: $('ov-start'), ovPause: $('ov-pause')
   };
 
   function fitCanvas() {
@@ -964,6 +978,34 @@
   function resetGame() { startGame(input.auto); }
 
   var labelsOn = true;
+  var timeScale = 1;
+
+  // ---- 时间流速 / 画面大小 滑块 ----
+  var timeEl = $('time'), timeV = $('time-v'), sizeEl = $('size'), sizeV = $('size-v');
+  function getTimeScale() { return timeScale; }
+  function applyTimeScale() {
+    if (!timeEl) return;
+    timeScale = clamp(parseFloat(timeEl.value) / 100, 0.2, 3);
+    timeV.textContent = timeScale.toFixed(1) + '×';
+    try { localStorage.setItem('blackhole.time', String(timeScale)); } catch (e) {}
+  }
+  function applyViewSize() {
+    if (!sizeEl) return;
+    var pct = clamp(parseFloat(sizeEl.value), 60, 130);
+    stage.style.width = pct + '%';
+    sizeV.textContent = Math.round(pct) + '%';
+    try { localStorage.setItem('blackhole.size', String(pct)); } catch (e) {}
+  }
+  if (timeEl) timeEl.addEventListener('input', applyTimeScale);
+  if (sizeEl) sizeEl.addEventListener('input', applyViewSize);
+  try {
+    var tSaved = parseFloat(localStorage.getItem('blackhole.time') || '');
+    if (tSaved > 0 && timeEl) timeEl.value = String(Math.round(tSaved * 100));
+    var sSaved = parseFloat(localStorage.getItem('blackhole.size') || '');
+    if (sSaved > 0 && sizeEl) sizeEl.value = String(Math.round(sSaved));
+  } catch (e) {}
+  applyTimeScale();
+  applyViewSize();
 
   // 实体按键
   [['btn-pull', 'pull'], ['btn-auto', 'auto'], ['btn-labels', 'labels']].forEach(function (pair) {
@@ -1036,11 +1078,7 @@
   });
 
   var btnPause2 = $('btn-pause2');
-  if (btnPause2) btnPause2.addEventListener('click', function (e) {
-    e.preventDefault();
-    if (mode === 'play') { mode = 'pause'; if (game) game.paused = true; show('pause'); }
-    else if (mode === 'pause') { mode = 'play'; if (game) game.paused = false; show(null); }
-  });
+  if (btnPause2) btnPause2.addEventListener('click', function (e) { e.preventDefault(); togglePause(); });
   var btnSound2 = $('btn-sound2');
   if (btnSound2) btnSound2.addEventListener('click', function (e) {
     e.preventDefault(); Sound.setMuted(!Sound.isMuted()); updateSoundBtn();
@@ -1048,28 +1086,27 @@
 
   function updateSoundBtn() {
     var m = Sound.isMuted();
-    els.btnSound.textContent = m ? '🔇' : '🔊';
-    els.btnSound.setAttribute('aria-pressed', m ? 'false' : 'true');
     var b2 = $('btn-sound2');
     if (b2) b2.firstChild.textContent = m ? '静音中' : '声音';
   }
   updateSoundBtn();
 
   $('btn-start').addEventListener('click', function () { startGame(false); });
-  $('btn-zen').addEventListener('click', function () {
+  var btnZenStart = $('btn-zen-start');
+  if (btnZenStart) btnZenStart.addEventListener('click', function () {
     $('btn-auto').classList.add('on');
     input.auto = true;
     startGame(true);
+    toggleZen(true);
   });
   $('btn-resume').addEventListener('click', function () {
     mode = 'play'; if (game) game.paused = false; show(null);
   });
   $('btn-reset').addEventListener('click', function () { resetGame(); });
-  els.btnSound.addEventListener('click', function () { Sound.setMuted(!Sound.isMuted()); updateSoundBtn(); });
-  $('btn-pause').addEventListener('click', function () {
+  function togglePause() {
     if (mode === 'play') { mode = 'pause'; if (game) game.paused = true; show('pause'); }
     else if (mode === 'pause') { mode = 'play'; if (game) game.paused = false; show(null); }
-  });
+  }
 
   window.addEventListener('keydown', function (e) {
     var k = e.key;
@@ -1079,7 +1116,7 @@
     else if (k === 'l' || k === 'L') { $('btn-labels').click(); }
     else if (k === 'v' || k === 'V') { if (mode === 'menu') startGame(false); else toggleZen(!(game && game.zen)); }
     else if (k === 'm' || k === 'M') { Sound.setMuted(!Sound.isMuted()); updateSoundBtn(); }
-    else if (k === 'p' || k === 'P' || k === 'Escape') { $('btn-pause').click(); }
+    else if (k === 'p' || k === 'P' || k === 'Escape') { togglePause(); }
     else if (k === 'r' || k === 'R') { if (mode !== 'menu') resetGame(); }
   });
   window.addEventListener('blur', function () {
@@ -1099,9 +1136,10 @@
     var dt = Math.min((ts - last) / 1000, MAX_FRAME);
     last = ts;
     if (mode === 'play' && game) {
-      acc += dt * speedup;
+      game.timeScale = timeScale;
+      acc += dt * speedup * timeScale;
       var guard = 0;
-      while (acc >= FIXED && guard < 900) { stepWorld(game, FIXED, input); acc -= FIXED; guard++; }
+      while (acc >= FIXED && guard < 2400) { stepWorld(game, FIXED, input); acc -= FIXED; guard++; }
       renderWorld(game, ctx);
       syncHud(game);
     } else if (game) {
@@ -1117,6 +1155,10 @@
     input.auto = true; game.auto = true;
     Sound.setSilent(true);
     show(null);
+    var pSize = parseFloat(params.get('size') || '');
+    if (pSize > 0 && sizeEl) { sizeEl.value = String(pSize); applyViewSize(); }
+    var pTime = parseFloat(params.get('time') || '');
+    if (pTime > 0 && timeEl) { timeEl.value = String(Math.round(pTime * 100)); applyTimeScale(); }
     var seedMass = parseFloat(params.get('mass') || '0');
     if (seedMass > 0) game.bh.mass = seedMass;     // 截图用：直接播种质量，好看到解锁后的天体
     runBot(game, shotTime);
@@ -1265,9 +1307,9 @@
     check('1000 粒子单步 < 6ms（能跑满 60fps）', perStep < 6, perStep.toFixed(2) + ' ms/步');
 
     // 12) 按钮
-    var ids = ['btn-pull', 'btn-pulse', 'btn-spawn', 'btn-auto', 'btn-labels', 'btn-sound2', 'btn-pause2'];
+    var ids = ['btn-pull', 'btn-pulse', 'btn-spawn', 'btn-auto', 'btn-zen', 'btn-labels', 'btn-sound2', 'btn-pause2'];
     var missing = ids.filter(function (id) { return !document.getElementById(id); });
-    check('七个实体按键都在页面上', missing.length === 0, missing.join(','));
+    check('八个实体按键都在页面上', missing.length === 0, missing.join(','));
     var pullEl = document.getElementById('btn-pull');
     if (pullEl) {
       input.pull = false;
@@ -1333,15 +1375,20 @@
     var w17 = createWorld(777);
     w17.particles.length = 0;
     spawnBinary(w17, true);
-    var sep0 = 0;
+    var maxSep = 0, minSep = 1e9;
     for (var s17 = 0; s17 < 120 * 4; s17++) {
       stepWorld(w17, FIXED, {});
       var pr = w17.particles.filter(function (p) { return p.kind === 'binary'; });
-      if (pr.length === 2) sep0 = Math.hypot(pr[0].x - pr[1].x, pr[0].y - pr[1].y);
+      if (pr.length === 2) {
+        var sp17 = Math.hypot(pr[0].x - pr[1].x, pr[0].y - pr[1].y);
+        if (sp17 > maxSep) maxSep = sp17;
+        if (sp17 < minSep) minSep = sp17;
+      }
     }
     var prEnd = w17.particles.filter(function (p) { return p.kind === 'binary'; });
     check('双星 4 秒后仍然成对（没飞散）', prEnd.length === 2, prEnd.length + ' 颗');
-    check('双星间距保持在合理范围', sep0 > 4 && sep0 < 60, sep0.toFixed(1) + ' px');
+    check('双星 4 秒内没被潮汐力扯散（最大间距 < 80px）', maxSep > 4 && maxSep < 80,
+          '间距 ' + minSep.toFixed(0) + '–' + maxSep.toFixed(0) + ' px');
 
     // 19) 吃掉一颗，另一颗变回普通恒星
     var w18 = createWorld(888);
@@ -1376,6 +1423,61 @@
     for (var s21 = 0; s21 < 120 * 8; s21++) stepWorld(w20, FIXED, {});
     check('退出静观后镜头拉回', w20.cam.scale > 0.9, w20.cam.scale.toFixed(2));
 
+    // 22) 顶栏重复按钮已移除
+    check('右上角重复的暂停/声音已移除',
+          !document.getElementById('bar-btns') && !document.getElementById('btn-pause') && !document.getElementById('btn-sound'));
+    check('暂停/声音仍在按键条里',
+          !!document.getElementById('btn-pause2') && !!document.getElementById('btn-sound2'));
+    var zenBtn = document.getElementById('btn-zen');
+    check('按键条的「静观」按钮有独立 id（不和开场按钮撞车）',
+          !!zenBtn && !!document.getElementById('btn-zen-start') && zenBtn.id !== document.getElementById('btn-zen-start').id);
+
+    // 23) 时间流速滑块
+    var tEl = document.getElementById('time');
+    check('时间流速滑块存在', !!tEl && !!document.getElementById('time-v'));
+    if (tEl) {
+      var tOld = tEl.value;
+      tEl.value = '250';
+      tEl.dispatchEvent(new Event('input', { bubbles: true }));
+      check('时间流速可以调到 2.5×', Math.abs(getTimeScale() - 2.5) < 0.01, getTimeScale() + '×');
+      tEl.value = '30';
+      tEl.dispatchEvent(new Event('input', { bubbles: true }));
+      check('时间流速可以调到 0.3×', Math.abs(getTimeScale() - 0.3) < 0.01, getTimeScale() + '×');
+      tEl.value = tOld;
+      tEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // 24) 画面大小滑块
+    var sEl = document.getElementById('size');
+    check('画面大小滑块存在', !!sEl && !!document.getElementById('size-v'));
+    if (sEl) {
+      var sOld = sEl.value;
+      sEl.value = '70';
+      sEl.dispatchEvent(new Event('input', { bubbles: true }));
+      check('画面大小会改变画布区域宽度', stage.style.width === '70%', stage.style.width);
+      sEl.value = sOld;
+      sEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // 25) 漫游时自己随机喷流
+    var w21 = createWorld(3030);
+    w21.auto = true;
+    var jetFrames = 0;
+    for (var s22 = 0; s22 < 120 * 45; s22++) {
+      stepWorld(w21, FIXED, {});
+      if (s22 % 12 === 0) {
+        for (var jk = 0; jk < w21.particles.length; jk++) {
+          if (w21.particles[jk].kind === 'jet') { jetFrames++; break; }
+        }
+      }
+    }
+    check('漫游时会自行随机喷流', (w21.autoJets || 0) >= 3, '45 秒内喷了 ' + (w21.autoJets || 0) + ' 次');
+    check('手动模式下不会自己喷流', (function () {
+      var wm = createWorld(3031); wm.auto = false;
+      for (var sm = 0; sm < 120 * 30; sm++) stepWorld(wm, FIXED, {});
+      return (wm.autoJets || 0) === 0;
+    })());
+
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
     document.title = (results.pass ? 'SELFTEST PASS' : 'SELFTEST FAIL') + ' ' +
@@ -1395,6 +1497,7 @@
     createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
     pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
     toggleZen: toggleZen, spawnBinary: spawnBinary, dissolveNebula: dissolveNebula,
+    getTimeScale: getTimeScale,
     getGame: function () { return game; }, getMode: function () { return mode; }
   };
 })();
