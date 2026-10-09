@@ -16,7 +16,7 @@
   var R0 = 15;                          // 初始视界半径（1 Rs = 15 px）
   var SOFT = 120;                       // 引力软化，避免中心奇点
   var FIELD_R = 780;                    // 超出这个距离就算飞出场景
-  var TARGET_POP = 520;                 // 场上维持的粒子数
+  var TARGET_POP = 460;                 // 场上维持的粒子数
   var SHADOW_K = 2.6;                   // 阴影半径 / Rs
   var PHOTON_K = 1.5;                   // 光子球 / Rs
   var ISCO_K = 3;                       // 最内稳定圆轨道 / Rs
@@ -187,7 +187,8 @@
       stars: [], nebula: [],
       auto: false, autoTimer: 0, autoTx: W * 0.5, autoTy: H * 0.5, userHold: 0,
       labels: true, pull: false, pulseFlare: 0,
-      pulseCd: 0, spawnAcc: 0, eaten: 0, bestMass: 1000,
+      pulseCd: 0, spawnAcc: 0, eaten: 0, spawned: 0, bestMass: 1000,
+      lastSpecial: {}, specialCount: { comet: 0, nebula: 0, minibh: 0 },
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
       unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
       cam: { scale: 1, x: W * 0.5, y: H * 0.5 }, camDist: 1,
@@ -217,13 +218,27 @@
 
   function circularSpeed(w, d) { return Math.sqrt(w.bh.gm / Math.max(1, d)); }
 
+  // 各类天体的出现概率（显式写出来，方便调"刷新频率"）
+  var SPAWN_P = {
+    minibh: 0.006,     // 小黑洞：最稀有，一颗能存在很久
+    comet:  0.032,     // 彗星
+    nebula: 0.011,     // 星云团：一颗就散出两百多颗尘埃，不能常来
+    planet: 0.045,     // 行星
+    star:   0.320      // 恒星
+  };
+  // 特殊天体的最小间隔（秒）：光靠概率不够——吃得越猛刷得越快，
+  // 加了这个冷却之后，无论节奏多快都保证稀有
+  var SPECIAL_CD = { comet: 12, nebula: 35, minibh: 75 };
+  function specialReady(w, kind) {
+    return (w.time - (w.lastSpecial[kind] === undefined ? -999 : w.lastSpecial[kind])) > SPECIAL_CD[kind];
+  }
   function pickKind(w) {
-    var r = rnd();
-    if (w.unlocked.minibh && r < 0.030) return 'minibh';
-    if (w.unlocked.comet && r < 0.125) return 'comet';
-    if (w.unlocked.nebula && r < 0.170) return 'nebula';
-    if (r < 0.22) return 'planet';
-    if (r < 0.56) return 'star';
+    var r = rnd(), acc = 0;
+    if (w.unlocked.minibh && specialReady(w, 'minibh')) { acc += SPAWN_P.minibh; if (r < acc) return 'minibh'; }
+    if (w.unlocked.comet && specialReady(w, 'comet')) { acc += SPAWN_P.comet; if (r < acc) return 'comet'; }
+    if (w.unlocked.nebula && specialReady(w, 'nebula')) { acc += SPAWN_P.nebula; if (r < acc) return 'nebula'; }
+    acc += SPAWN_P.planet; if (r < acc) return 'planet';
+    acc += SPAWN_P.star; if (r < acc) return 'star';
     return 'dust';
   }
 
@@ -236,7 +251,7 @@
     // 从场地外围进来；anywhere=true 时散布在整个场里
     var ang = rnd() * Math.PI * 2;
     var zoom = clamp(w.cam ? w.cam.scale : 1, SCALE_MIN, 1);
-    var d = anywhere ? (120 + rnd() * 620) / zoom : (520 + rnd() * 200) / zoom;
+    var d = anywhere ? (120 + rnd() * 620) / zoom : (430 + rnd() * 190) / zoom;
     var x = w.bh.x + Math.cos(ang) * d, y = w.bh.y + Math.sin(ang) * d;
     var vc = circularSpeed(w, d) * (0.72 + rnd() * 0.38);
     var dir = rnd() < 0.5 ? 1 : -1;
@@ -255,6 +270,11 @@
     if (kind === 'jet') { p.life = p.maxLife = 1.4 + rnd() * 0.6; }
     if (kind === 'nebula') { p.m = 0; p.cloud = 1; }
     w.particles.push(p);
+    w.spawned += 1;
+    if (w.specialCount && w.specialCount[kind] !== undefined) {
+      w.specialCount[kind] += 1;
+      w.lastSpecial[kind] = w.time;
+    }
     return p;
   }
 
@@ -276,6 +296,8 @@
     };
     miniStats(p);
     w.particles.push(p);
+    w.spawned += 1;
+    if (w.specialCount) { w.specialCount.minibh += 1; w.lastSpecial.minibh = w.time; }
     if (w.isMain) { Sound.chime(true); w.hint = 3; w.hintText = '一颗小黑洞飘进了吸积盘'; }
     return p;
   }
@@ -608,7 +630,12 @@
     }
 
     // --- 维持种群
-    w.spawnAcc += dt * (18 + w.rateAvg * 3) * zoom;
+    // 按"缺口"补充：场上满了就完全不刷（不再有源源不断的凭空出现），
+    // 被吃掉多少就补多少；上限随视界大小放宽，免得大黑洞把盘吃空
+    var deficit = targetPop - w.particles.length;
+    var refillCeil = Math.min(40, 10 + bh.r * 0.8);
+    var spawnRate = clamp(deficit * 0.4, 0, refillCeil);
+    w.spawnAcc += dt * spawnRate;
     while (w.spawnAcc > 1 && w.particles.length < targetPop) {
       w.spawnAcc -= 1;
       spawnParticle(w, pickKind(w), false);
@@ -1415,6 +1442,16 @@
     var seedMass = parseFloat(params.get('mass') || '0');
     if (seedMass > 0) game.bh.mass = seedMass;     // 截图用：直接播种质量，好看到解锁后的天体
     runBot(game, shotTime);
+    if (params.has('dbg')) {
+      var visN = 0, visR = (W / 2) / clamp(game.cam.scale, SCALE_MIN, 1);
+      for (var vi = 0; vi < game.particles.length; vi++) {
+        if (Math.hypot(game.particles[vi].x - game.bh.x, game.particles[vi].y - game.bh.y) < visR) visN++;
+      }
+      document.title = 'vis=' + visN + ' pop=' + game.particles.length + ' spawned=' + game.spawned +
+      ' eaten=' + game.eaten + ' minis=' + (game.minis ? game.minis.length : 0) +
+      ' time=' + game.time.toFixed(0) + ' rate=' + game.rate.toFixed(1) + ' rateAvg=' + game.rateAvg.toFixed(1) +
+      ' target=' + Math.round(TARGET_POP / Math.pow(clamp(game.cam.scale, SCALE_MIN, 1), 1.15));
+    }
     if (params.has('jets')) {
       fireJets(game, 1.2);
       for (var js = 0; js < 120 * 0.55; js++) stepWorld(game, FIXED, { pull: false, auto: true });
@@ -1947,6 +1984,64 @@
     check('脚本与样式带版本号（避免缓存跑旧代码）',
           !!scr && /[?&]v=\d+/.test(scr.getAttribute('src')) && !!lnk && /[?&]v=\d+/.test(lnk.getAttribute('href')),
           (scr ? scr.getAttribute('src') : '无脚本'));
+
+    // 32) 刷新频率：总体变慢，特殊天体更稀有
+    var wS = createWorld(3300);
+    wS.unlocked = { comet: true, nebula: true, minibh: true };
+    for (var ssw = 0; ssw < 120 * 25; ssw++) stepWorld(wS, FIXED, {});   // 先让它把场子铺满（填充期不算）
+    var sp0 = wS.spawned, ea0 = wS.eaten;
+    for (var ss = 0; ss < 120 * 40; ss++) stepWorld(wS, FIXED, {});
+    var perSec = (wS.spawned - sp0) / 40;
+    var diag = '稳态刷新 ' + perSec.toFixed(1) + '/s，吞噬 ' + ((wS.eaten - ea0) / 40).toFixed(1) +
+               '/s，场上 ' + wS.particles.length + '，40 秒共生成 ' + (wS.spawned - sp0);
+    check('稳态刷新不至于失控（≤ 14 个/秒）', perSec <= 14, diag);
+    var nStar = 0;
+    for (var sk = 0; sk < wS.particles.length; sk++) {
+      if (wS.particles[sk].kind === 'star') nStar++;
+    }
+    check('场上粒子数维持在目标附近（没被吃空也没爆场）',
+          wS.particles.length >= 150 && wS.particles.length <= 700,
+          '场上 ' + wS.particles.length + ' 颗（目标 ' + TARGET_POP + '）');
+    check('普通天体仍然常见（不是把所有东西都掐了）', nStar >= 20, nStar + ' 颗');
+
+    // 冷却：拉到 5 分钟，验证特殊天体真的被"最小间隔"限住
+    var wCd = createWorld(3500);
+    wCd.unlocked = { comet: true, nebula: true, minibh: true };
+    wCd.particles.length = 0;
+    for (var scd = 0; scd < 120 * 300; scd++) stepWorld(wCd, FIXED, {});
+    var cC = wCd.specialCount.comet, cN = wCd.specialCount.nebula, cM = wCd.specialCount.minibh;
+    check('5 分钟内彗星不超过 30 颗（冷却 12 秒）', cC <= 30, cC + ' 颗');
+    check('5 分钟内星云团不超过 12 团（冷却 35 秒）', cN <= 12, cN + ' 团');
+    check('5 分钟内小黑洞不超过 6 颗（冷却 75 秒）', cM <= 6, cM + ' 颗');
+    check('特殊天体确实会出现（不是被掐死）', cC >= 3 && cN >= 1, '彗星 ' + cC + ' / 星云 ' + cN + ' / 小黑洞 ' + cM);
+    // 猛吃（按住吸力）时场子不能被吃空 —— 这是刚才过度限流犯过的错
+    var wD = createWorld(3400);
+    wD.unlocked = { comet: true, nebula: true, minibh: true };
+    for (var sdf = 0; sdf < 120 * 25; sdf++) stepWorld(wD, FIXED, {});
+    var popFull = wD.particles.length;
+    var spD0 = wD.spawned;
+    wD.pull = true;
+    for (var sdp = 0; sdp < 120 * 30; sdp++) stepWorld(wD, FIXED, {});
+    check('猛吃时场上不会被吃空（≥ 120 颗）', wD.particles.length >= 120,
+          '铺满 ' + popFull + ' → 猛吃 30 秒后 ' + wD.particles.length + ' 颗');
+    var pullRate = (wD.spawned - spD0) / 30;
+    check('猛吃时刷新率也有天花板（≤ 42/秒）', pullRate <= 42,
+          '猛吃时 ' + pullRate.toFixed(1) + '/秒，场上 ' + wD.particles.length + ' 颗');
+
+    check('特殊天体总概率 ≤ 6%',
+          SPAWN_P.minibh + SPAWN_P.comet + SPAWN_P.nebula <= 0.06,
+          ((SPAWN_P.minibh + SPAWN_P.comet + SPAWN_P.nebula) * 100).toFixed(1) + '%');
+
+    // 33) 大黑洞（视界大、进食极快）时场子也不能被吃薄
+    var wBig = createWorld(3600);
+    wBig.unlocked = { comet: true, nebula: true, minibh: true };
+    wBig.bh.mass = 12000;
+    for (var sbf = 0; sbf < 120 * 25; sbf++) stepWorld(wBig, FIXED, {});
+    var bigFull = wBig.particles.length;
+    wBig.pull = true;
+    for (var sbp = 0; sbp < 120 * 30; sbp++) stepWorld(wBig, FIXED, {});
+    check('大黑洞猛吃时场上也不会空（≥ 120 颗）', wBig.particles.length >= 120,
+          '铺满 ' + bigFull + ' → 大黑洞猛吃 30 秒后 ' + wBig.particles.length + ' 颗（视界 ' + wBig.bh.r.toFixed(0) + '）');
 
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
