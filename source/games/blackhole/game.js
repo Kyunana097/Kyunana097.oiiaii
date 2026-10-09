@@ -188,7 +188,7 @@
       labels: true, pull: false, pulseFlare: 0,
       pulseCd: 0, spawnAcc: 0, eaten: 0, bestMass: 1000,
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
-      unlocked: {}, zen: false, hint: 0, hintText: '', lensOff: false, jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
+      unlocked: {}, zen: false, hint: 0, hintText: '', jetWindAcc: 0, autoJetTimer: 2 + rnd() * 4, autoJets: 0, timeScale: 1,
       cam: { scale: 1, x: W * 0.5, y: H * 0.5 },
       peak: 0
     };
@@ -299,6 +299,9 @@
 
   function fireJets(w, strength) {
     var bh = w.bh, n = Math.round(4 + strength * 8);
+    var jetN = 0;
+    for (var c = 0; c < w.particles.length; c++) if (w.particles[c].kind === 'jet') jetN++;
+    if (jetN > 130) return;                      // 别让喷流无限堆积
     for (var s = -1; s <= 1; s += 2) {
       for (var i = 0; i < n; i++) {
         var spread = (rnd() - 0.5) * 0.5;
@@ -375,7 +378,11 @@
       p.vx += dx / d * k; p.vy += dy / d * k;
     }
     w.rings.push({ x: w.bh.x, y: w.bh.y, r: 20, max: PULSE_R, life: 1, color: '#9fd0ff' });
-    w.pulseFlare = 1.6;
+    w.rings.push({ x: w.bh.x, y: w.bh.y, r: w.bh.r * 1.6, max: 340, life: 1, color: '#bfe6ff' });
+    w.pulseFlare = 1.7;
+    w.flash = Math.min(0.55, w.flash + 0.22);
+    fireJets(w, 1.3);                 // 脉冲同时也从两极喷一股
+    Sound.jet();
     Sound.pulse();
     return true;
   }
@@ -454,7 +461,7 @@
       if (p.kind === 'jet') {
         p.x += p.vx * dt; p.y += p.vy * dt;
         p.life -= dt;
-        if (p.life <= 0 || p.y < -60 || p.y > H + 60 || p.x < -60 || p.x > W + 60) continue;
+        if (p.life <= 0) continue;      // 只按寿命回收（投影后可能还在画面里）
         keep.push(p);
         continue;
       }
@@ -560,7 +567,7 @@
             if (jd2 > JET_R * JET_R) continue;
             var jd = Math.sqrt(jd2) || 1;
             var fall = 1 - jd / JET_R;
-            var k = JET_PUSH * fall * 0.08;
+            var k = JET_PUSH * fall * 0.08 * jetProj();   // 看不见的喷流不该推东西
             q2.vx += (J.vx / 600 * 0.7 + jx / jd * 0.6) * k;
             q2.vy += (J.vy / 600 * 0.7 + jy / jd * 0.6) * k;
           }
@@ -643,7 +650,8 @@
   }
 
   // 把盘里的物质按半径分箱，得到一条沿半径的亮度曲线
-  function diskSquash() { return clamp(squash, 0.14, 1); }
+  function diskSquash() { return clamp(squash, 0.14, 1); }   // 吸积盘的光随视角压扁
+  function particleSquash() { return 1; }                    // 粒子按真实位置画，不跟视角变
 
   function diskBins(w, rIn, rOut, counts) {
     var i;
@@ -715,25 +723,81 @@
       ctx.fill('evenodd');
     }
 
-    // 旋臂：开普勒剪切下的密度波（图案刚性旋转，不会越缠越紧）
-    var arms = 3;
-    for (var ai2 = 0; ai2 < arms; ai2++) {
-      ctx.beginPath();
-      for (var k = 0; k <= 30; k++) {
-        var tk = k / 30;
-        var rk = rIn + tk * (rOut - rIn);
-        var kep = Math.pow(rIn / rk, 1.5);
-        var ph = bh.spin * 0.4 + ai2 * (Math.PI * 2 / arms) + (1 - kep) * 2.6;
-        var ax = bh.x + Math.cos(ph) * rk;
-        var ay = bh.y + Math.sin(ph) * rk * q;
-        if (k === 0) ctx.moveTo(ax, ay); else ctx.lineTo(ax, ay);
-      }
-      ctx.strokeStyle = rgbaOf([255, 232, 205], 0.07 + heat * 0.10);
-      ctx.lineWidth = 3.2 + heat * 3.4;
-      ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // 喷流：极向的，屏幕上的竖直位移按 sin(视角) 投影；俯视时会缩成一点（可以接受）
+  function jetProj() { return Math.sin(clamp(tiltDeg, 0, 80) * Math.PI / 180); }
+  function jetY(bh, y) { return bh.y + (y - bh.y) * jetProj(); }
+  function jetAlpha(p) {
+    var t = clamp(p.life / p.maxLife, 0, 1);
+    return t > 0.25 ? 1 : t / 0.25;      // 前 75% 保持满亮，最后才淡出 → 能一直射到屏幕外
+  }
+
+  function drawParticle(w, ctx, p, bh) {
+    var col = KINDS[p.kind].color;
+    var hot = p.kind === 'jet' ? 1 : p.heat;
+
+    // 星云团：一大团半透明的紫，靠近黑洞才散开
+    if (p.kind === 'nebula') {
+      var ng = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 1.9);
+      ng.addColorStop(0, withAlpha('#b49cf0', 0.22));
+      ng.addColorStop(0.55, withAlpha('#7a5fd0', 0.11));
+      ng.addColorStop(1, withAlpha('#5a3fb0', 0));
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = ng;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.9, 0, 6.2832); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      return;
     }
 
-    ctx.globalCompositeOperation = 'source-over';
+    // 双星：两颗之间拉一条淡淡的连线
+    if (p.kind === 'binary' && p.pair && !p.pair.dead) {
+      ctx.strokeStyle = 'rgba(255,214,150,0.18)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.pair.x, p.pair.y); ctx.stroke();
+    }
+
+    // 彗尾：沿轨迹拖出一条渐隐的光带
+    if (p.kind === 'comet' && p.trail.length > 1) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (var ti = 1; ti < p.trail.length; ti++) {
+        var ta = ti / p.trail.length;
+        ctx.strokeStyle = withAlpha('#8fd0ff', ta * 0.45);
+        ctx.lineWidth = 0.8 + ta * 3.4;
+        ctx.beginPath();
+        ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
+        ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
+        ctx.stroke();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    if (p.kind === 'jet') {
+      var jl = jetAlpha(p);
+      var jp = jetProj();
+      var y0 = jetY(bh, p.y), y1 = jetY(bh, p.y - p.vy * 0.06);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = withAlpha('#dff0ff', jl * 0.5);
+      ctx.lineWidth = Math.max(1, p.r * 1.6 * (0.4 + 0.6 * jp));
+      ctx.beginPath();
+      ctx.moveTo(p.x, y0);
+      ctx.lineTo(p.x - p.vx * 0.06 * jp, y1);
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    var gy = p.kind === 'jet' ? jetY(bh, p.y) : p.y;
+    if (hot > 0.05) {
+      var spr = glowSprite(col);
+      var sc = p.r * (3.4 + hot * 5.5) * (p.kind === 'jet' ? (0.45 + 0.55 * jetProj()) : 1);
+      ctx.globalAlpha = 0.35 + hot * 0.6;
+      ctx.drawImage(spr, p.x - sc / 2, gy - sc / 2, sc, sc);
+    }
+    ctx.globalAlpha = p.kind === 'jet' ? jetAlpha(p) : 0.55 + hot * 0.45;
+    ctx.fillStyle = col;
+    var pr = p.r * (1 + hot * 0.25) * (p.kind === 'jet' ? (0.5 + 0.5 * jetProj()) : 1);
+    ctx.beginPath(); ctx.arc(p.x, gy, pr, 0, 6.2832); ctx.fill();
   }
 
   function renderWorld(w, ctx) {
@@ -783,103 +847,13 @@
 
     // 吸积盘：直接像是一条很扁的带，透镜像是压在光子环上的上、下两道拱
     var heat = clamp(w.rateAvg / 12 + w.pulseFlare * 0.5, 0, 1);
-    if (!w.lensOff) {
-      drawLensedDisk(w, ctx, heat);
-    } else {
-      // 关掉透镜时退回简单的一圈辉光
-      var diskR0 = shadow * (2.4 + heat * 0.55);
-      ctx.save();
-      ctx.translate(bh.x, bh.y); ctx.scale(1, 0.58);
-      var dg0 = ctx.createRadialGradient(0, 0, shadow * 0.9, 0, 0, diskR0);
-      dg0.addColorStop(0, 'rgba(255,236,200,' + (0.30 + heat * 0.30) + ')');
-      dg0.addColorStop(0.45, 'rgba(255,168,86,' + (0.30 + heat * 0.32) + ')');
-      dg0.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = dg0;
-      ctx.beginPath(); ctx.arc(0, 0, diskR0, 0, 6.2832); ctx.fill();
-      ctx.restore();
-      ctx.globalCompositeOperation = 'source-over';
-    }
+    drawLensedDisk(w, ctx, heat);      // 引力透镜恒定开启
 
-    // 粒子
+    // 粒子。喷流分两批画：下半段（背离观察者）在这里画，会被盘和阴影挡住
     for (var pi = 0; pi < w.particles.length; pi++) {
       var p = w.particles[pi];
-      var col = KINDS[p.kind].color;
-      var hot = p.kind === 'jet' ? 1 : p.heat;
-
-      // 星云团：一大团半透明的紫，靠近黑洞才散开
-      if (p.kind === 'nebula') {
-        var ng = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 1.9);
-        ng.addColorStop(0, withAlpha('#b49cf0', 0.22));
-        ng.addColorStop(0.55, withAlpha('#7a5fd0', 0.11));
-        ng.addColorStop(1, withAlpha('#5a3fb0', 0));
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.fillStyle = ng;
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.9, 0, 6.2832); ctx.fill();
-        ctx.globalCompositeOperation = 'source-over';
-        continue;
-      }
-
-      // 双星：两颗之间拉一条淡淡的连线
-      if (p.kind === 'binary' && p.pair && !p.pair.dead) {
-        ctx.strokeStyle = 'rgba(255,214,150,0.18)';
-        ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.pair.x, p.pair.y); ctx.stroke();
-      }
-
-      // 彗尾：沿轨迹拖出一条渐隐的光带
-      if (p.kind === 'comet' && p.trail.length > 1) {
-        ctx.globalCompositeOperation = 'lighter';
-        for (var ti = 1; ti < p.trail.length; ti++) {
-          var ta = ti / p.trail.length;
-          ctx.strokeStyle = withAlpha('#8fd0ff', ta * 0.45);
-          ctx.lineWidth = 0.8 + ta * 3.4;
-          ctx.beginPath();
-          ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
-          ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
-          ctx.stroke();
-        }
-        ctx.globalCompositeOperation = 'source-over';
-      }
-
-      // 喷流：画成一束，而不是一串点
-      if (p.kind === 'jet') {
-        var jl = clamp(p.life / p.maxLife, 0, 1);
-        var jf = 0.6 + 0.4 * Math.sin(clamp(tiltDeg, 0, 80) * Math.PI / 180);   // 越接近俯视越短（但不至于看不见）
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.strokeStyle = withAlpha('#dff0ff', jl * 0.5);
-        ctx.lineWidth = p.r * 1.5;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(p.x - p.vx * 0.05 * jf, p.y - p.vy * 0.05 * jf);
-        ctx.stroke();
-        ctx.globalCompositeOperation = 'source-over';
-      }
-      if (hot > 0.05) {
-        var spr = glowSprite(col);
-        var sc = p.r * (3.4 + hot * 5.5);
-        ctx.globalAlpha = 0.35 + hot * 0.6;
-        if (p.kind !== 'jet' && !w.lensOff) {
-          var gy = bh.y + (p.y - bh.y) * diskSquash();
-          ctx.drawImage(spr, p.x - sc / 2, gy - sc * diskSquash() / 2, sc, sc * diskSquash());
-        } else {
-          ctx.drawImage(spr, p.x - sc / 2, p.y - sc / 2, sc, sc);
-        }
-      }
-      ctx.globalAlpha = p.kind === 'jet' ? clamp(p.life / p.maxLife, 0, 1) : 0.55 + hot * 0.45;
-      ctx.fillStyle = col;
-      var pr = p.r * (1 + hot * 0.25);
-      if (p.kind !== 'jet' && !w.lensOff) {
-        // 盘里的物质按同一视角压扁，看起来才是"一个盘"而不是一团球
-        var sy = bh.y + (p.y - bh.y) * diskSquash();
-        ctx.save();
-        ctx.translate(p.x, sy);
-        ctx.scale(1, diskSquash());
-        ctx.beginPath(); ctx.arc(0, 0, pr, 0, 6.2832); ctx.fill();
-        ctx.restore();
-      } else {
-        ctx.beginPath(); ctx.arc(p.x, p.y, pr, 0, 6.2832); ctx.fill();
-      }
+      if (p.kind === 'jet' && p.vy < 0) continue;      // 上半段留到阴影之后画
+      drawParticle(w, ctx, p, bh);
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -896,6 +870,14 @@
     ring.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = ring;
     ctx.beginPath(); ctx.arc(bh.x, bh.y, shadow * 1.7, 0, 6.2832); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 上半段喷流：画在阴影之后，所以不会被遮挡，一直射出屏幕
+    for (var pk = 0; pk < w.particles.length; pk++) {
+      var q = w.particles[pk];
+      if (q.kind === 'jet' && q.vy < 0) drawParticle(w, ctx, q, bh);
+    }
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
     // 吸力增强时的能量环
@@ -1088,7 +1070,6 @@
     Sound.unlock();
     game = createWorld(20261009);
     game.labels = labelsOn;
-    game.lensOff = !isLensOn();
     setLegend(labelsOn);
     toggleZen(false);
     if (zen) { game.auto = true; input.auto = true; $('btn-auto').classList.add('on'); }
@@ -1117,7 +1098,7 @@
     squash = Math.cos(tiltDeg * Math.PI / 180);
     if (tiltV) {
       tiltV.textContent = Math.round(tiltDeg) + '°';
-      tiltV.title = tiltDeg < 20 ? '俯视：盘是圆的，能看到开普勒剪切拉出的旋臂'
+      tiltV.title = tiltDeg < 20 ? '俯视：盘是圆的，物质按开普勒定律绕行'
         : (tiltDeg > 55 ? '近侧视：盘压成一条，上下透镜拱最明显' : '斜视');
     }
     syncPresetButtons();
@@ -1133,22 +1114,11 @@
   if (topBtn) topBtn.addEventListener('click', function (e) { e.preventDefault(); setTilt(0); });
   if (sideBtn) sideBtn.addEventListener('click', function (e) { e.preventDefault(); setTilt(63); });
 
-  var lensEl = $('lens');
-  function isLensOn() { return !(lensEl && !lensEl.checked); }
-  function applyLens() {
-    var on = isLensOn();
-    if (game) game.lensOff = !on;
-    try { localStorage.setItem('blackhole.lens', on ? '1' : '0'); } catch (e) {}
-  }
-  if (lensEl) lensEl.addEventListener('change', applyLens);
   try {
-    var lSaved = localStorage.getItem('blackhole.lens');
-    if (lSaved !== null && lensEl) lensEl.checked = lSaved === '1';
     var tSaved2 = parseFloat(localStorage.getItem('blackhole.tilt.v2') || '');
     if (!isNaN(tSaved2) && tiltEl) tiltEl.value = String(tSaved2);
   } catch (e) {}
   applyTilt();
-  applyLens();
   function applyTimeScale() {
     if (!timeEl) return;
     timeScale = clamp(parseFloat(timeEl.value) / 100, 0.2, 3);
@@ -1328,12 +1298,15 @@
     if (pSize > 0 && sizeEl) { sizeEl.value = String(pSize); applyViewSize(); }
     var pTilt = parseFloat(params.get('tilt') || '');
     if (!isNaN(pTilt) && tiltEl) { tiltEl.value = String(pTilt); applyTilt(); }
-    if (params.get('lens') === '0' && lensEl) { lensEl.checked = false; applyLens(); }
     var pTime = parseFloat(params.get('time') || '');
     if (pTime > 0 && timeEl) { timeEl.value = String(Math.round(pTime * 100)); applyTimeScale(); }
     var seedMass = parseFloat(params.get('mass') || '0');
     if (seedMass > 0) game.bh.mass = seedMass;     // 截图用：直接播种质量，好看到解锁后的天体
     runBot(game, shotTime);
+    if (params.has('jets')) {
+      fireJets(game, 1.2);
+      for (var js = 0; js < 120 * 0.55; js++) stepWorld(game, FIXED, { pull: false, auto: true });
+    }
     if (params.has('zen')) {
       toggleZen(true);
       for (var zs = 0; zs < 120 * 14; zs++) stepWorld(game, FIXED, { pull: false, auto: true });
@@ -1448,6 +1421,14 @@
     check('脉冲给的内向冲量 ≥ 轨道速度的 10%', w6.particles[0].vx < -vc6 * 0.1, w6.particles[0].vx.toFixed(1) + ' vs vc=' + vc6.toFixed(1));
     check('脉冲进入冷却', w6.pulseCd > 0, w6.pulseCd.toFixed(1));
     check('冷却中不能重复脉冲', pulse(w6) === false);
+    var w6b = createWorld(1235);
+    var jetsBefore = w6b.particles.filter(function (p) { return p.kind === 'jet'; }).length;
+    pulse(w6b);
+    var jetsAfter = w6b.particles.filter(function (p) { return p.kind === 'jet'; }).length;
+    check('脉冲会同时喷出喷流', jetsAfter - jetsBefore >= 10, '+' + (jetsAfter - jetsBefore) + ' 个喷流粒子');
+    var upAfter = w6b.particles.filter(function (p) { return p.kind === 'jet' && p.vy < 0; }).length;
+    var dnAfter = w6b.particles.filter(function (p) { return p.kind === 'jet' && p.vy > 0; }).length;
+    check('脉冲的喷流是双向的', upAfter > 0 && dnAfter > 0, '上 ' + upAfter + ' / 下 ' + dnAfter);
 
     // 8) 吸力增强 → 引力更大
     var w7 = createWorld(1234);
@@ -1571,7 +1552,9 @@
     check('吃掉一颗后另一颗变成普通恒星', ba.pair && ba.pair.kind === 'star' && ba.pair.pair === null,
           ba.pair ? ba.pair.kind : 'pair 丢了');
 
-    // 20) 喷流真的会把物质吹开（和侧面同样距离的粒子做对照）
+    // 20) 喷流真的会把物质吹开（和侧面同样距离的粒子做对照；要在喷流可见的视角下）
+    var tiltSave20 = getTilt();
+    setTilt(63);
     var w19 = createWorld(1010);
     w19.particles.length = 0;
     var inJet = { kind: 'dust', x: w19.bh.x, y: w19.bh.y - 220, vx: 0, vy: 0, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], seed: 1, dead: false, pair: null, cloud: 0 };
@@ -1584,6 +1567,17 @@
     var rSide = Math.hypot(side.x - w19.bh.x, side.y - w19.bh.y);
     check('喷流把 funnel 里的物质吹得比侧面更远', rJet > rSide,
           '喷流侧 ' + rJet.toFixed(0) + 'px vs 侧面 ' + rSide.toFixed(0) + 'px');
+
+    // 20b) 俯视时喷流投影为 0，就不该再推物质（看不见的东西不该使力）
+    var w19b = createWorld(1011);
+    w19b.particles.length = 0;
+    var inJetB = { kind: 'dust', x: w19b.bh.x, y: w19b.bh.y - 220, vx: 0, vy: 0, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], seed: 1, dead: false, pair: null, cloud: 0 };
+    w19b.particles.push(inJetB);
+    w19b.particles.push({ kind: 'planet', x: w19b.bh.x + 4, y: w19b.bh.y, vx: 0, vy: 0, r: 8, m: 60, heat: 0, life: 0, maxLife: 0, trail: [], seed: 3, dead: false, pair: null, cloud: 0 });
+    setTilt(0);
+    for (var s19b = 0; s19b < 120 * 0.35; s19b++) stepWorld(w19b, FIXED, {});
+    check('俯视时喷流不再推物质', inJetB.vy > -5, 'vy=' + inJetB.vy.toFixed(1));
+    setTilt(tiltSave20);
 
     // 21) 静观模式：镜头拉远、自动漫游、退出后拉回
     var w20 = createWorld(2020);
@@ -1651,22 +1645,10 @@
     })());
 
     // 26) 引力透镜：开关 + 两种渲染路径的冒烟测试
-    var lensEl2 = document.getElementById('lens');
-    check('引力透镜开关存在且默认打开', !!lensEl2 && lensEl2.checked);
+    check('引力透镜开关已移除（恒定开启）', !document.getElementById('lens'));
     var rErr1 = '';
     try { renderWorld(createWorld(1234), ctx); } catch (e) { rErr1 = e.message; }
     check('开启透镜时渲染不报错', rErr1 === '', rErr1);
-    if (lensEl2) {
-      lensEl2.checked = false;
-      lensEl2.dispatchEvent(new Event('change', { bubbles: true }));
-      check('关掉透镜后状态同步', isLensOn() === false);
-      var rErr2 = '';
-      try { var wr2 = createWorld(1234); wr2.lensOff = true; renderWorld(wr2, ctx); } catch (e) { rErr2 = e.message; }
-      check('关闭透镜时渲染不报错', rErr2 === '', rErr2);
-      lensEl2.checked = true;
-      lensEl2.dispatchEvent(new Event('change', { bubbles: true }));
-      check('可以重新打开透镜', isLensOn() === true);
-    }
     var lensW = createWorld(1234);
     lensW.particles.push({ kind: 'dust', x: lensW.bh.x + 120, y: lensW.bh.y, vx: 0, vy: 0, r: 2, m: 1, heat: 0.8, life: 0, maxLife: 0, trail: [], seed: 1, dead: false, pair: null, cloud: 0 });
     var lensOK = true;
@@ -1713,7 +1695,7 @@
       check('点「俯视版」会切回 0°', getTilt() === 0, getTilt() + '°');
       var rErr6 = '';
       try { renderWorld(createWorld(1234), ctx); } catch (e) { rErr6 = e.message; }
-      check('俯视版渲染不报错（含旋臂）', rErr6 === '', rErr6);
+      check('俯视版渲染不报错', rErr6 === '', rErr6);
     }
     var armW = createWorld(1234);
     var spin0 = armW.bh.spin;
@@ -1721,7 +1703,34 @@
     check('盘在转（自转相位在推进）', armW.bh.spin > spin0, (armW.bh.spin - spin0).toFixed(2));
     var armOK = true;
     try { renderWorld(armW, ctx); } catch (e) { armOK = false; }
-    check('带旋臂的俯视渲染不报错', armOK);
+    check('盘在转时俯视渲染不报错', armOK);
+
+    // 29) 粒子不跟视角变；喷流按视角投影
+    var saveTilt = getTilt();
+    setTilt(0);
+    check('俯视时粒子投影系数 = 1', particleSquash() === 1, particleSquash());
+    check('俯视时喷流投影 = 0（缩成一点，可以接受）', Math.abs(jetProj()) < 0.001, jetProj().toFixed(3));
+    setTilt(63);
+    check('侧视时粒子投影系数仍是 1（只有盘的光随视角变）', particleSquash() === 1, particleSquash());
+    check('侧视时喷流按 sin63° 投影', Math.abs(jetProj() - Math.sin(63 * Math.PI / 180)) < 0.01, jetProj().toFixed(3));
+    check('吸积盘的光确实随视角压扁', getSquash() < 0.5, getSquash().toFixed(2));
+
+    // 30) 喷流：射到屏幕外才结束；上下两批都能画
+    var jw = createWorld(4242);
+    jw.particles.length = 0;
+    jw.particles.push({ kind: 'jet', x: jw.bh.x, y: jw.bh.y - 40, vx: 0, vy: -620,
+                        r: 1.6, m: 0, heat: 1, life: 3, maxLife: 3, trail: [], dead: false, pair: null, cloud: 0 });
+    jw.particles.push({ kind: 'jet', x: jw.bh.x, y: jw.bh.y + 40, vx: 0, vy: 620,
+                        r: 1.6, m: 0, heat: 1, life: 3, maxLife: 3, trail: [], dead: false, pair: null, cloud: 0 });
+    for (var sj = 0; sj < 120 * 1.2; sj++) stepWorld(jw, FIXED, {});
+    var upJet = jw.particles.filter(function (p) { return p.kind === 'jet' && p.vy < 0; })[0];
+    var dnJet = jw.particles.filter(function (p) { return p.kind === 'jet' && p.vy > 0; })[0];
+    check('向上的喷流已经飞出屏幕仍在（不被出界删掉）', !!upJet && upJet.y < -20, upJet ? upJet.y.toFixed(0) : '没了');
+    check('向下的喷流同样还在', !!dnJet && dnJet.y > H + 20, dnJet ? dnJet.y.toFixed(0) : '没了');
+    var jErr = '';
+    try { renderWorld(jw, ctx); } catch (e) { jErr = e.message; }
+    check('上下两批喷流同时渲染不报错', jErr === '', jErr);
+    setTilt(saveTilt);
 
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
@@ -1742,7 +1751,8 @@
     createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
     pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
     toggleZen: toggleZen, spawnBinary: spawnBinary, dissolveNebula: dissolveNebula,
-    isLensOn: isLensOn, renderWorld: renderWorld, getTilt: getTilt, getSquash: getSquash,
+    renderWorld: renderWorld, getTilt: getTilt, getSquash: getSquash, particleSquash: particleSquash,
+    jetProj: jetProj,
     setTilt: setTilt,
     getTimeScale: getTimeScale,
     getGame: function () { return game; }, getMode: function () { return mode; }
