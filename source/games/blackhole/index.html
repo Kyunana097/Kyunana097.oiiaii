@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>黑洞 · 吞噬 — Kyunana的栈</title>
+<meta name="description" content="一个可以躺着玩的解压小游戏：拖动黑洞，让恒星、尘埃和行星落进它的吸积盘。">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="wrap">
+
+  <header id="bar">
+    <a id="back" href="/lab.html" title="回到我的小站">← 我的小站</a>
+    <h1>黑洞 <span>吞噬</span></h1>
+    <div id="bar-btns">
+      <button id="btn-sound" class="ghost" aria-pressed="true" title="声音开关 (M)">🔊</button>
+      <button id="btn-pause" class="ghost" title="暂停 (P)">❚❚</button>
+    </div>
+  </header>
+
+  <div id="hud">
+    <div class="hud-cell"><span class="k">总质量</span><span id="hud-mass" class="v">1 000</span></div>
+    <div class="hud-cell"><span class="k">已吞噬</span><span id="hud-eaten" class="v">0</span></div>
+    <div class="hud-cell"><span class="k">视界半径</span><span id="hud-rs" class="v">15</span></div>
+    <div class="hud-cell grow">
+      <span class="k">吸积盘亮度 <b id="hud-rate">平静</b></span>
+      <div id="disk"><i></i></div>
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="game" width="960" height="640" aria-label="黑洞吞噬游戏画面"></canvas>
+    <section class="overlay" id="ov-start">
+      <h2>黑洞 <em>吞噬</em></h2>
+      <p class="lead">没有失败，没有倒计时。把黑洞拖到星星多的地方，剩下的交给引力。</p>
+      <div class="keys">
+        <div><b>拖动画面</b>＝移动黑洞（它会被你拖着走，别担心物理）</div>
+        <div><b>按住「吸力」</b>＝暂时加强引力，星星会更快掉进来</div>
+        <div><b>点「脉冲」</b>＝一次性把附近的东西全拽过来（有冷却）</div>
+        <div><b>点「撒星星」</b>＝往场上丢一把新的尘埃和恒星</div>
+        <div><b>「自动漫游」</b>＝放手，让它自己游过去吃</div>
+      </div>
+      <div class="row">
+        <button id="btn-start" class="primary">开始</button>
+        <button id="btn-zen" class="ghost">自动漫游着看</button>
+      </div>
+      <p class="tiny">行星靠近到洛希极限以内会被潮汐力撕成一条碎片流；越靠近视界，粒子越热、越亮。</p>
+    </section>
+    <section class="overlay hidden" id="ov-pause">
+      <h2>暂停中</h2>
+      <p class="lead">黑洞在等你。它很有耐心。</p>
+      <div class="row">
+        <button id="btn-resume" class="primary">继续</button>
+        <button id="btn-reset" class="ghost">重新开始</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="legend">
+    <span><i style="border-color:rgba(150,170,215,.75)"></i>Rs 视界</span>
+    <span><i style="border-color:rgba(255,206,140,.85)"></i>1.5 Rs 光子球</span>
+    <span><i style="border-color:rgba(140,215,255,.8)"></i>3 Rs 最内稳定圆轨道</span>
+    <span><i style="border-color:rgba(255,255,255,.5)"></i>2.6 Rs 阴影（看到的轮廓）</span>
+    <span class="dim">按比例画在同一张图上</span>
+  </div>
+
+  <div id="pad" role="group" aria-label="触屏控制">
+    <button id="btn-pull" class="ctl hold">吸力<kbd>按住</kbd></button>
+    <button id="btn-pulse" class="ctl">脉冲<kbd>空格</kbd></button>
+    <button id="btn-spawn" class="ctl">撒星星<kbd>F</kbd></button>
+    <button id="btn-auto" class="ctl toggle">自动漫游<kbd>A</kbd></button>
+    <button id="btn-labels" class="ctl toggle">标注<kbd>L</kbd></button>
+    <button id="btn-sound2" class="ctl">声音<kbd>M</kbd></button>
+    <button id="btn-pause2" class="ctl">暂停<kbd>P</kbd></button>
+  </div>
+
+  <footer id="foot">
+    <span>Canvas + 原生 JS，无依赖</span><span class="sep">·</span>
+    <span>画面里的环用的是史瓦西解的标准结果：光子球 1.5 <i>R</i><sub>s</sub>、最内稳定圆轨道 3 <i>R</i><sub>s</sub>、黑洞阴影约 2.6 <i>R</i><sub>s</sub>（视界本身只有 1 <i>R</i><sub>s</sub>）</span>
+    <span class="sep">·</span>
+    <span>参考：<a href="https://en.wikipedia.org/wiki/Photon_sphere" target="_blank" rel="noopener">Photon sphere</a>、<a href="https://en.wikipedia.org/wiki/Innermost_stable_circular_orbit" target="_blank" rel="noopener">ISCO</a>、<a href="https://en.wikipedia.org/wiki/Roche_limit" target="_blank" rel="noopener">Roche limit</a></span>
+    <span class="sep">·</span>
+    <span>写的：<b>deepseek-flash（DSH）</b></span>
+  </footer>
+</div>
+
+<div id="selftest" hidden></div>
+<script src="game.js"></script>
+</body>
+</html>

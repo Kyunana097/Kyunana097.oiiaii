@@ -1,0 +1,1055 @@
+/* ============================================================================
+   黑洞 · 吞噬
+   一个没有失败的解压小游戏：拖动黑洞，让尘埃、恒星和行星落进吸积盘。
+   物理是简化版的：牛顿引力 + 软化 + 吸积盘粘滞；视觉上的几个环用的是
+   史瓦西解的标准结果（光子球 1.5 Rs、ISCO 3 Rs、阴影 ≈ 2.6 Rs）。
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  var W = 960, H = 640;                 // 逻辑分辨率 3:2
+  var FIXED = 1 / 120;                  // 物理步长
+  var MAX_FRAME = 0.05;
+  var MAX_PARTICLES = 1500;
+  var GM0 = 9.0e6;                      // 初始 G·M（像素³/秒²）
+  var GM_CAP = 4.5e7;
+  var R0 = 15;                          // 初始视界半径（1 Rs = 15 px）
+  var SOFT = 120;                       // 引力软化，避免中心奇点
+  var FIELD_R = 780;                    // 超出这个距离就算飞出场景
+  var TARGET_POP = 430;                 // 场上维持的粒子数
+  var SHADOW_K = 2.6;                   // 阴影半径 / Rs
+  var PHOTON_K = 1.5;                   // 光子球 / Rs
+  var ISCO_K = 3;                       // 最内稳定圆轨道 / Rs
+  var PULSE_R = 520, PULSE_CD = 5;
+
+  var KINDS = {
+    dust:   { r0: 1.1, r1: 2.1, m: 1,  color: '#a9bcdd' },
+    star:   { r0: 2.4, r1: 4.0, m: 6,  color: '#ffe7bd' },
+    planet: { r0: 6.0, r1: 9.5, m: 60, color: '#8fd3c4' },
+    frag:   { r0: 1.4, r1: 2.8, m: 4,  color: '#ffcf9e' },
+    jet:    { r0: 1.0, r1: 2.2, m: 0,  color: '#cfeaff' }
+  };
+
+  var clamp = function (v, a, b) { return v < a ? a : (v > b ? b : v); };
+  var lerp = function (a, b, t) { return a + (b - a) * t; };
+
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  var rnd = Math.random;
+
+  function fmt(n) {
+    n = Math.round(n);
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  }
+
+  // ---------------------------------------------------------------- 音频
+  var Sound = (function () {
+    var ac = null, master = null, drone = null, droneGain = null, filt = null;
+    var muted = false, silent = false, started = false;
+    try { muted = localStorage.getItem('blackhole.mute') === '1'; } catch (e) { muted = false; }
+
+    function ctx() {
+      if (ac) return ac;
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try { ac = new AC(); } catch (e) { ac = null; }
+      return ac;
+    }
+    function ensure() {
+      var a = ctx(); if (!a) return null;
+      if (!master) {
+        master = a.createGain(); master.gain.value = 0.9; master.connect(a.destination);
+      }
+      return a;
+    }
+    function droneStart() {
+      if (started || silent || muted) return;
+      var a = ensure(); if (!a) return;
+      started = true;
+      filt = a.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 420; filt.Q.value = 0.6;
+      droneGain = a.createGain(); droneGain.gain.value = 0.0001;
+      filt.connect(droneGain); droneGain.connect(master);
+      drone = [];
+      [55, 82.4, 110.3].forEach(function (f, i) {
+        var o = a.createOscillator(), g = a.createGain();
+        o.type = i === 2 ? 'triangle' : 'sine';
+        o.frequency.value = f * (1 + (i - 1) * 0.002);
+        g.gain.value = i === 2 ? 0.25 : 0.6;
+        o.connect(g); g.connect(filt); o.start();
+        drone.push(o);
+      });
+      droneGain.gain.exponentialRampToValueAtTime(0.05, a.currentTime + 3);
+    }
+    function tone(freq, dur, type, gain, slide) {
+      if (silent || muted) return;
+      var a = ensure(); if (!a) return;
+      if (a.state === 'suspended') { try { a.resume(); } catch (e) {} }
+      var t0 = a.currentTime, o = a.createOscillator(), g = a.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(freq, t0);
+      if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(20, slide), t0 + dur);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gain || 0.05, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(master || a.destination);
+      o.start(t0); o.stop(t0 + dur + 0.05);
+    }
+    function noise(dur, gain, freq, q) {
+      if (silent || muted) return;
+      var a = ensure(); if (!a) return;
+      var len = Math.max(1, Math.floor(a.sampleRate * dur));
+      var buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0);
+      for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      var src = a.createBufferSource(); src.buffer = buf;
+      var f = a.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq || 700; f.Q.value = q || 0.8;
+      var g = a.createGain(); g.gain.value = gain || 0.05;
+      src.connect(f); f.connect(g); g.connect(master || a.destination); src.start();
+    }
+    return {
+      unlock: function () { var a = ensure(); if (a && a.state === 'suspended') { try { a.resume(); } catch (e) {} } droneStart(); },
+      setSilent: function (v) { silent = !!v; },
+      isMuted: function () { return muted; },
+      setMuted: function (m) {
+        muted = !!m;
+        try { localStorage.setItem('blackhole.mute', muted ? '1' : '0'); } catch (e) {}
+        if (droneGain && ac) {
+          droneGain.gain.cancelScheduledValues(ac.currentTime);
+          droneGain.gain.exponentialRampToValueAtTime(muted ? 0.0001 : 0.05, ac.currentTime + 0.4);
+        }
+        if (!muted) droneStart();
+      },
+      mass: function (ratio) {                 // 随质量变亮变浑厚
+        if (!filt || !droneGain || !ac) return;
+        filt.frequency.setTargetAtTime(300 + ratio * 900, ac.currentTime, 1.2);
+        droneGain.gain.setTargetAtTime(0.035 + clamp(ratio, 0, 1) * 0.05, ac.currentTime, 1.5);
+      },
+      eat: function (heat, m) {
+        noise(0.16, 0.035 + heat * 0.03, 320 + heat * 900, 0.9);
+        tone(140 - heat * 40, 0.22, 'sine', 0.03 + heat * 0.03, 70);
+        if (m >= 40) tone(60, 0.5, 'triangle', 0.05, 38);
+      },
+      breakup: function () {
+        noise(0.34, 0.06, 1800, 0.7);
+        tone(320, 0.42, 'sawtooth', 0.028, 60);
+      },
+      pulse: function () { tone(46, 0.9, 'sine', 0.07, 120); noise(0.5, 0.03, 260, 0.5); },
+      chime: function (hi) { tone(hi ? 660 : 440, 0.5, 'sine', 0.035); setTimeout(function () { tone(hi ? 880 : 554, 0.6, 'sine', 0.03); }, 160); }
+    };
+  })();
+
+  // ---------------------------------------------------------------- 世界
+  function createWorld(seed) {
+    rnd = mulberry32(seed || 20261009);
+    var w = {
+      isMain: true, paused: false, time: 0,
+      bh: { x: W * 0.5, y: H * 0.5, tx: W * 0.5, ty: H * 0.5, r: R0, mass: 1000, gm: GM0, boost: 0, spin: 0 },
+      particles: [], jets: [], sparks: [], rings: [],
+      stars: [], nebula: [],
+      auto: false, autoTimer: 0, autoTx: W * 0.5, autoTy: H * 0.5, userHold: 0,
+      labels: true, pull: false, pulseFlare: 0,
+      pulseCd: 0, spawnAcc: 0, eaten: 0, bestMass: 1000,
+      rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
+      peak: 0
+    };
+    // 背景星场（含少量亮星）
+    for (var i = 0; i < 340; i++) {
+      w.stars.push({ x: rnd() * W, y: rnd() * H, b: 0.18 + rnd() * 0.7, s: rnd() < 0.06 ? 2 : 1 });
+    }
+    for (var n = 0; n < 3; n++) {
+      w.nebula.push({ x: rnd() * W, y: rnd() * H, r: 180 + rnd() * 260, c: ['#241a44', '#10233f', '#3a1c33'][n] });
+    }
+    for (var k = 0; k < 260; k++) spawnParticle(w, 'dust', true);
+    for (var s = 0; s < 40; s++) spawnParticle(w, 'star', true);
+    for (var p = 0; p < 5; p++) spawnParticle(w, 'planet', true);
+    return w;
+  }
+
+  function circularSpeed(w, d) { return Math.sqrt(w.bh.gm / Math.max(1, d)); }
+
+  function spawnParticle(w, kind, anywhere) {
+    if (w.particles.length >= MAX_PARTICLES) return null;
+    var def = KINDS[kind];
+    var r = def.r0 + rnd() * (def.r1 - def.r0);
+    var m = def.m;
+    // 从场地外围进来；anywhere=true 时散布在整个场里
+    var ang = rnd() * Math.PI * 2;
+    var d = anywhere ? (120 + rnd() * 620) : (520 + rnd() * 180);
+    var x = w.bh.x + Math.cos(ang) * d, y = w.bh.y + Math.sin(ang) * d;
+    x = clamp(x, -120, W + 120); y = clamp(y, -120, H + 120);
+    var vc = circularSpeed(w, d) * (0.72 + rnd() * 0.38);
+    var dir = rnd() < 0.5 ? 1 : -1;
+    var vx = -Math.sin(ang) * vc * dir + (rnd() - 0.5) * 12;
+    var vy = Math.cos(ang) * vc * dir + (rnd() - 0.5) * 12;
+    var p = {
+      kind: kind, x: x, y: y, vx: vx, vy: vy, r: r, m: m, heat: 0,
+      life: 0, maxLife: 0, trail: [], seed: rnd() * 1000, dead: false
+    };
+    if (kind === 'jet') { p.life = p.maxLife = 1.4 + rnd() * 0.6; }
+    w.particles.push(p);
+    return p;
+  }
+
+  function spawnCluster(w, n) {
+    n = n || 70;
+    for (var i = 0; i < n; i++) {
+      var k = rnd() < 0.12 ? 'star' : (rnd() < 0.06 ? 'planet' : 'dust');
+      spawnParticle(w, k, true);
+    }
+    w.rings.push({ x: w.bh.x, y: w.bh.y, r: 40, max: 460, life: 1, color: '#ffd9a8' });
+  }
+
+  function addSparks(w, x, y, color, n, speed) {
+    for (var i = 0; i < n; i++) {
+      var a = rnd() * Math.PI * 2, s = (0.3 + rnd()) * (speed || 120);
+      w.sparks.push({
+        x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life: 0.4 + rnd() * 0.6, max: 1, color: color, r: 1 + rnd() * 2.2
+      });
+    }
+    if (w.sparks.length > 400) w.sparks.splice(0, w.sparks.length - 400);
+  }
+
+  function fireJets(w, strength) {
+    var bh = w.bh, n = Math.round(4 + strength * 8);
+    for (var s = -1; s <= 1; s += 2) {
+      for (var i = 0; i < n; i++) {
+        var spread = (rnd() - 0.5) * 0.5;
+        var sp = 420 + rnd() * 320;
+        w.particles.push({
+          kind: 'jet', x: bh.x + (rnd() - 0.5) * bh.r, y: bh.y + s * bh.r * 0.4,
+          vx: spread * 180, vy: s * sp, r: 1.2 + rnd() * 1.6, m: 0, heat: 1,
+          life: 1.6 + rnd() * 0.8, maxLife: 2.4, trail: [], dead: false
+        });
+      }
+    }
+  }
+
+  function eatParticle(w, p) {
+    var bh = w.bh;
+    bh.mass += p.m;
+    w.eaten += 1;
+    var heat = p.kind === 'star' ? 0.75 : (p.kind === 'planet' ? 1 : 0.4);
+    addSparks(w, p.x, p.y, KINDS[p.kind] ? KINDS[p.kind].color : '#fff', p.kind === 'planet' ? 26 : 8, p.kind === 'planet' ? 260 : 130);
+    w.flash = Math.min(0.5, w.flash + (p.kind === 'planet' ? 0.35 : 0.06));
+    w.rate += 1;
+    Sound.eat(heat, p.m);
+    if (p.kind === 'planet') { fireJets(w, 1); w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 2, max: 320, life: 1, color: '#bfe6ff' }); }
+  }
+
+  function breakupPlanet(w, p) {
+    Sound.breakup();
+    var n = 14 + Math.round(rnd() * 6);
+    var ang = Math.atan2(p.y - w.bh.y, p.x - w.bh.x) + Math.PI / 2;   // 沿切向拉成流
+    for (var i = 0; i < n; i++) {
+      var off = (i / n - 0.5) * 46;
+      var sp = circularSpeed(w, Math.hypot(p.x - w.bh.x, p.y - w.bh.y)) * (0.9 + rnd() * 0.3);
+      w.particles.push({
+        kind: 'frag', x: p.x + Math.cos(ang) * off, y: p.y + Math.sin(ang) * off,
+        vx: p.vx + Math.cos(ang) * off * 0.5 + (rnd() - 0.5) * sp * 0.12,
+        vy: p.vy + Math.sin(ang) * off * 0.5 + (rnd() - 0.5) * sp * 0.12,
+        r: 1.4 + rnd() * 1.4, m: 3, heat: 0.2, life: 0, maxLife: 0, trail: [], dead: false
+      });
+    }
+    addSparks(w, p.x, p.y, '#ffcf9e', 22, 180);
+    p.dead = true;
+    w.rings.push({ x: p.x, y: p.y, r: 8, max: 150, life: 1, color: '#ffcf9e' });
+  }
+
+  function pulse(w) {
+    if (w.pulseCd > 0) return false;
+    w.pulseCd = PULSE_CD;
+    for (var i = 0; i < w.particles.length; i++) {
+      var p = w.particles[i];
+      if (p.kind === 'jet') continue;
+      var dx = w.bh.x - p.x, dy = w.bh.y - p.y;
+      var d = Math.hypot(dx, dy) || 1;
+      if (d > PULSE_R) continue;
+      // 冲量按当地的圆轨道速度给：近处是"猛拽"，远处只是轻轻一推
+      var k = (1 - d / PULSE_R) * circularSpeed(w, d) * 1.6;
+      p.vx += dx / d * k; p.vy += dy / d * k;
+    }
+    w.rings.push({ x: w.bh.x, y: w.bh.y, r: 20, max: PULSE_R, life: 1, color: '#9fd0ff' });
+    w.pulseFlare = 1.6;
+    Sound.pulse();
+    return true;
+  }
+
+  // ---------------------------------------------------------------- 物理
+  function stepWorld(w, dt, inp) {
+    if (w.paused) return;
+    w.time += dt;
+    inp = inp || {};
+    var bh = w.bh;
+
+    // --- 黑洞移动：鼠标/手指优先，其次自动漫游
+    if (inp.pointerX !== null && inp.pointerX !== undefined) {
+      bh.tx = inp.pointerX; bh.ty = inp.pointerY;
+      w.userHold = 1.2;
+    }
+    if (inp.auto) w.auto = true;
+    if (w.userHold > 0) w.userHold -= dt;
+    if (w.auto && w.userHold <= 0) {
+      w.autoTimer -= dt;
+      if (w.autoTimer <= 0) {
+        w.autoTimer = 1.6;
+        // 追最密的一片：找视野内粒子的重心（按 1/d 加权）
+        var sx = 0, sy = 0, sw = 0;
+        for (var i = 0; i < w.particles.length; i++) {
+          var p = w.particles[i];
+          if (p.kind === 'jet') continue;
+          var d = Math.hypot(p.x - bh.x, p.y - bh.y);
+          if (d > 760) continue;
+          var wgt = 1 / (60 + d);
+          sx += p.x * wgt; sy += p.y * wgt; sw += wgt;
+        }
+        if (sw > 0) { w.autoTx = clamp(sx / sw, 60, W - 60); w.autoTy = clamp(sy / sw, 60, H - 60); }
+      }
+      bh.tx = lerp(bh.tx, w.autoTx, 1 - Math.exp(-dt / 0.9));
+      bh.ty = lerp(bh.ty, w.autoTy, 1 - Math.exp(-dt / 0.9));
+    }
+    var follow = 1 - Math.exp(-dt / 0.18);   // 跟手但不生硬
+    bh.x = lerp(bh.x, bh.tx, follow);
+    bh.y = lerp(bh.y, bh.ty, follow);
+    bh.spin += dt * (0.5 + w.rateAvg * 0.002);
+
+    // --- 吸力增强 / 冷却 / 亮度
+    bh.boost = lerp(bh.boost, (w.pull || inp.pull) ? 1 : 0, 1 - Math.pow(0.01, dt));
+    if (w.pulseCd > 0) w.pulseCd = Math.max(0, w.pulseCd - dt);
+    var gm = Math.min(GM_CAP, GM0 * Math.pow(bh.mass / 1000, 0.45)) * (1 + bh.boost * 0.95);
+    bh.gm = gm;
+    var ratio = clamp(Math.log10(Math.max(1, bh.mass / 1000)) / 1.4, 0, 1);
+    bh.r = clamp(R0 * Math.pow(bh.mass / 1000, 0.42), R0, 62);
+    w.rateAvg = lerp(w.rateAvg, w.rate, 1 - Math.pow(0.2, dt));
+    w.rate = Math.max(0, w.rate - dt * 4.5);
+    if (w.pulseFlare > 0) w.pulseFlare = Math.max(0, w.pulseFlare - dt);
+    w.flash = Math.max(0, w.flash - dt * 1.6);
+    if (w.milestone > 0) w.milestone -= dt;
+    Sound.mass(ratio);
+
+    // --- 粒子
+    var keep = [];
+    for (var pi = 0; pi < w.particles.length; pi++) {
+      var p = w.particles[pi];
+      if (p.dead) continue;
+
+      if (p.kind === 'jet') {
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        p.life -= dt;
+        if (p.life <= 0 || p.y < -60 || p.y > H + 60 || p.x < -60 || p.x > W + 60) continue;
+        keep.push(p);
+        continue;
+      }
+
+      var dx = bh.x - p.x, dy = bh.y - p.y;
+      var d2 = dx * dx + dy * dy;
+      var d = Math.sqrt(d2);
+      var soft = d2 + SOFT;
+      var acc = gm / soft;
+      p.vx += acc * dx / d * dt;
+      p.vy += acc * dy / d * dt;
+
+      // 吸积盘粘滞：靠近黑洞时损失角动量，保证会掉进去（不然会永远绕圈）
+      if (d < bh.r * 9) {
+        var damp = 1 - 0.9 * dt * (1 - d / (bh.r * 9));
+        p.vx *= damp; p.vy *= damp;
+      }
+
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      d = Math.hypot(bh.x - p.x, bh.y - p.y);
+
+      // 吞噬
+      if (d < bh.r + p.r) { eatParticle(w, p); continue; }
+
+      // 洛希极限：行星被撕成碎片流
+      if (p.kind === 'planet') {
+        var roche = bh.r * 3.2 + p.r * 2.5;
+        if (d < roche) { breakupPlanet(w, p); continue; }
+      }
+
+      // 热度（越靠近视界越亮）
+      p.heat = clamp(1 - (d - bh.r) / (bh.r * 7), 0, 1);
+
+      // 飞出场景就回收（等会儿会有新的补进来）
+      if (d > FIELD_R && (p.vx * dx + p.vy * dy) < 0) continue;
+
+      keep.push(p);
+    }
+    w.particles = keep;
+
+    // --- 维持种群
+    w.spawnAcc += dt * (18 + w.rateAvg * 3);
+    while (w.spawnAcc > 1 && w.particles.length < TARGET_POP) {
+      w.spawnAcc -= 1;
+      var roll = rnd();
+      spawnParticle(w, roll < 0.72 ? 'dust' : (roll < 0.95 ? 'star' : 'planet'), false);
+    }
+    if (w.spawnAcc > 4) w.spawnAcc = 0;
+
+    // --- 火星 / 圆环
+    for (var si = w.sparks.length - 1; si >= 0; si--) {
+      var sp = w.sparks[si];
+      sp.life -= dt;
+      if (sp.life <= 0) { w.sparks.splice(si, 1); continue; }
+      sp.x += sp.vx * dt; sp.y += sp.vy * dt;
+      sp.vx *= 0.97; sp.vy *= 0.97;
+    }
+    for (var ri = w.rings.length - 1; ri >= 0; ri--) {
+      var rg = w.rings[ri];
+      rg.r += (rg.max - rg.r) * (1 - Math.pow(0.02, dt));
+      rg.life -= dt * 0.9;
+      if (rg.life <= 0) w.rings.splice(ri, 1);
+    }
+
+    if (bh.mass > w.bestMass) w.bestMass = bh.mass;
+
+    // --- 质量里程碑
+    var ms = [5000, 10000, 25000, 50000, 100000];
+    for (var mi = 0; mi < ms.length; mi++) {
+      if (w.massLog < ms[mi] && bh.mass >= ms[mi]) {
+        w.massLog = ms[mi];
+        w.milestone = 2.6;
+        Sound.chime(mi > 1);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- 渲染
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  var glowCache = {};
+  function withAlpha(hex, a) {
+    var h = hex.replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  function glowSprite(color) {
+    if (glowCache[color]) return glowCache[color];
+    var size = 64, c = document.createElement('canvas');
+    c.width = c.height = size;
+    var g = c.getContext('2d');
+    var grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grd.addColorStop(0, withAlpha(color, 0.95));
+    grd.addColorStop(0.35, withAlpha(color, 0.42));
+    grd.addColorStop(1, withAlpha(color, 0));
+    g.fillStyle = grd;
+    g.fillRect(0, 0, size, size);
+    glowCache[color] = c;
+    return c;
+  }
+
+  function renderWorld(w, ctx) {
+    var bh = w.bh;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, W, H);
+
+    // 背景
+    var bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#06070d'); bg.addColorStop(1, '#04050a');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    for (var ni = 0; ni < w.nebula.length; ni++) {
+      var nb = w.nebula[ni];
+      var ng = ctx.createRadialGradient(nb.x, nb.y, 0, nb.x, nb.y, nb.r);
+      ng.addColorStop(0, nb.c); ng.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = 0.5; ctx.fillStyle = ng;
+      ctx.fillRect(nb.x - nb.r, nb.y - nb.r, nb.r * 2, nb.r * 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // 背景星（带引力透镜的假位移）
+    var shadow = bh.r * SHADOW_K;
+    var infl = shadow * 3.4;
+    for (var si = 0; si < w.stars.length; si++) {
+      var s = w.stars[si];
+      var dx = s.x - bh.x, dy = s.y - bh.y;
+      var d = Math.hypot(dx, dy) || 1;
+      var x = s.x, y = s.y, b = s.b;
+      if (d < infl) {
+        var t = 1 - d / infl;
+        var push = t * t * shadow * 2.2;
+        x += dx / d * push; y += dy / d * push;
+        b = Math.min(1, b * (1 + t * 2.2));
+      }
+      ctx.globalAlpha = b;
+      ctx.fillStyle = '#dfe8ff';
+      ctx.fillRect(x - s.s / 2, y - s.s / 2, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+
+    // 吸积盘的整体辉光（随进食速率变亮）
+    var heat = clamp(w.rateAvg / 12 + w.pulseFlare * 0.5, 0, 1);
+    var diskR = shadow * (2.4 + heat * 0.55 + w.pulseFlare * 0.25);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.save();
+    ctx.translate(bh.x, bh.y);
+    ctx.scale(1, 0.58);                       // 压扁一点，看起来像个倾斜的盘
+    var dg = ctx.createRadialGradient(0, 0, shadow * 0.9, 0, 0, diskR);
+    dg.addColorStop(0, 'rgba(255,236,200,' + (0.30 + heat * 0.30) + ')');
+    dg.addColorStop(0.42, 'rgba(255,168,86,' + (0.34 + heat * 0.34) + ')');
+    dg.addColorStop(0.62, 'rgba(255,120,60,' + (0.18 + heat * 0.22) + ')');
+    dg.addColorStop(0.82, 'rgba(140,90,255,0.10)');
+    dg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = dg;
+    ctx.beginPath(); ctx.arc(0, 0, diskR, 0, 6.2832); ctx.fill();
+    ctx.restore();
+
+    // 旋涡纹理（几段弧，缓慢转动）
+    ctx.save();
+    ctx.translate(bh.x, bh.y);
+    ctx.scale(1, 0.58);
+    ctx.rotate(bh.spin);
+    for (var a = 0; a < 3; a++) {
+      ctx.strokeStyle = 'rgba(255,190,120,' + (0.10 + heat * 0.16) + ')';
+      ctx.lineWidth = 2 + a * 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, shadow * (1.3 + a * 0.35), a * 2.1, a * 2.1 + 1.5 + heat);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 粒子
+    for (var pi = 0; pi < w.particles.length; pi++) {
+      var p = w.particles[pi];
+      var col = KINDS[p.kind].color;
+      var hot = p.kind === 'jet' ? 1 : p.heat;
+      if (hot > 0.05) {
+        var spr = glowSprite(col);
+        var sc = p.r * (3.4 + hot * 5.5);
+        ctx.globalAlpha = 0.35 + hot * 0.6;
+        ctx.drawImage(spr, p.x - sc / 2, p.y - sc / 2, sc, sc);
+      }
+      ctx.globalAlpha = p.kind === 'jet' ? clamp(p.life / p.maxLife, 0, 1) : 0.55 + hot * 0.45;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1 + hot * 0.25), 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 黑洞阴影 + 光子环
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(bh.x, bh.y, shadow, 0, 6.2832); ctx.fill();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(255,225,190,' + (0.5 + heat * 0.4) + ')';
+    ctx.lineWidth = 2.5 + heat * 2;
+    ctx.beginPath(); ctx.arc(bh.x, bh.y, shadow * 0.995, 0, 6.2832); ctx.stroke();
+    var ring = ctx.createRadialGradient(bh.x, bh.y, shadow * 0.9, bh.x, bh.y, shadow * 1.7);
+    ring.addColorStop(0, 'rgba(255,200,140,' + (0.22 + heat * 0.2) + ')');
+    ring.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = ring;
+    ctx.beginPath(); ctx.arc(bh.x, bh.y, shadow * 1.7, 0, 6.2832); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 吸力增强时的能量环
+    if (bh.boost > 0.02) {
+      ctx.strokeStyle = 'rgba(150,210,255,' + (bh.boost * 0.5) + ')';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(bh.x, bh.y, shadow * (1.6 + Math.sin(w.time * 6) * 0.08), 0, 6.2832); ctx.stroke();
+    }
+
+    // 标注：视界 / 光子球 / ISCO
+    if (w.labels) {
+      var marks = [
+        [1, 'Rs 视界', 'rgba(150,170,215,0.55)', [3, 5]],
+        [PHOTON_K, '1.5 Rs 光子球', 'rgba(255,206,140,0.65)', [3, 5]],
+        [ISCO_K, '3 Rs 最内稳定圆轨道', 'rgba(140,215,255,0.6)', [7, 6]],
+        [SHADOW_K, '2.6 Rs 阴影（看到的轮廓）', 'rgba(255,255,255,0.35)', [1, 4]]
+      ];
+      ctx.save();
+      for (var mi2 = 0; mi2 < marks.length; mi2++) {
+        ctx.setLineDash(marks[mi2][3]);
+        ctx.strokeStyle = marks[mi2][2];
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(bh.x, bh.y, bh.r * marks[mi2][0], 0, 6.2832); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    // 火星
+    for (var qi = 0; qi < w.sparks.length; qi++) {
+      var q = w.sparks[qi];
+      ctx.globalAlpha = clamp(q.life / q.max, 0, 1);
+      ctx.fillStyle = q.color;
+      ctx.fillRect(q.x - q.r / 2, q.y - q.r / 2, q.r, q.r);
+    }
+    ctx.globalAlpha = 1;
+
+    // 事件圆环（脉冲 / 撒星星 / 撕裂）
+    ctx.globalCompositeOperation = 'lighter';
+    for (var gi = 0; gi < w.rings.length; gi++) {
+      var g2 = w.rings[gi];
+      ctx.globalAlpha = clamp(g2.life, 0, 1) * 0.5;
+      ctx.strokeStyle = g2.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(g2.x, g2.y, g2.r, 0, 6.2832); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 吞噬闪白 + 暗角
+    if (w.flash > 0.01) {
+      ctx.fillStyle = 'rgba(255,235,200,' + (w.flash * 0.35) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+    var vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.72);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+    // 里程碑提示
+    if (w.milestone > 0) {
+      ctx.globalAlpha = clamp(w.milestone, 0, 1);
+      ctx.fillStyle = '#ffe6c0';
+      ctx.font = '600 24px -apple-system, "Noto Sans CJK SC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('质量 ' + fmt(bh.mass), W / 2, 46);
+      ctx.font = '15px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(255,214,170,0.75)';
+      ctx.fillText('吸积盘又亮了一点', W / 2, 68);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'left';
+    }
+  }
+
+  // ---------------------------------------------------------------- DOM
+  var DPR = 1;
+  var $ = function (id) { return document.getElementById(id); };
+  var canvas = $('game'), ctx = canvas.getContext('2d');
+  var stage = $('stage'), selftestEl = $('selftest');
+  var els = {
+    mass: $('hud-mass'), eaten: $('hud-eaten'), rs: $('hud-rs'), rate: $('hud-rate'), disk: $('disk'),
+    ovStart: $('ov-start'), ovPause: $('ov-pause'), btnSound: $('btn-sound')
+  };
+
+  function fitCanvas() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (game) renderWorld(game, ctx);
+  }
+
+  function setLegend(on) {
+    var el = $('legend');
+    if (el) el.classList.toggle('hidden', !on);
+  }
+
+  function show(which) {
+    els.ovStart.classList.toggle('hidden', which !== 'start');
+    els.ovPause.classList.toggle('hidden', which !== 'pause');
+    var p2 = $('btn-pause2');
+    if (p2) p2.firstChild.textContent = (which === 'pause') ? '继续' : '暂停';
+  }
+
+  function syncHud(w) {
+    els.mass.textContent = fmt(w.bh.mass);
+    els.eaten.textContent = fmt(w.eaten);
+    els.rs.textContent = w.bh.r.toFixed(0);
+    els.disk.firstChild.style.width = clamp(w.rateAvg / 14 * 100, 0, 100).toFixed(0) + '%';
+    var r = w.rateAvg;
+    els.rate.textContent = r > 9 ? '炽热' : (r > 4 ? '活跃' : (r > 1.2 ? '微亮' : '平静'));
+    var pb = $('btn-pulse');
+    if (pb) {
+      var cd = w.pulseCd;
+      pb.classList.toggle('cool', cd > 0);
+      pb.disabled = cd > 0;
+      pb.firstChild.textContent = cd > 0 ? ('脉冲 ' + cd.toFixed(0) + 's') : '脉冲';
+    }
+  }
+
+  // ---------------------------------------------------------------- 输入
+  var game = null, mode = 'menu', input = { pointerX: null, pointerY: null, pull: false, auto: false };
+  var lastTouchAt = 0, activeTouchId = null;
+
+  function toLogical(clientX, clientY) {
+    var r = canvas.getBoundingClientRect();
+    return {
+      x: clamp((clientX - r.left) / r.width * W, 0, W),
+      y: clamp((clientY - r.top) / r.height * H, 0, H)
+    };
+  }
+
+  function setPointer(clientX, clientY) {
+    var p = toLogical(clientX, clientY);
+    input.pointerX = p.x; input.pointerY = p.y;
+  }
+
+  stage.addEventListener('mousemove', function (e) {
+    if (mode !== 'play' || !game) return;
+    setPointer(e.clientX, e.clientY);
+  });
+  stage.addEventListener('mousedown', function (e) {
+    Sound.unlock();
+    if (mode !== 'play' || !game) return;
+    if (Date.now() - lastTouchAt < 600) return;
+    setPointer(e.clientX, e.clientY);
+  });
+  stage.addEventListener('touchstart', function (e) {
+    Sound.unlock();
+    lastTouchAt = Date.now();
+    if (mode !== 'play' || !game) return;
+    var t = e.changedTouches[0];
+    if (activeTouchId === null) activeTouchId = t.identifier;
+    if (t.identifier === activeTouchId) setPointer(t.clientX, t.clientY);
+    e.preventDefault();
+  }, { passive: false });
+  stage.addEventListener('touchmove', function (e) {
+    lastTouchAt = Date.now();
+    if (activeTouchId === null || mode !== 'play' || !game) return;
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      if (t.identifier === activeTouchId) { setPointer(t.clientX, t.clientY); e.preventDefault(); }
+    }
+  }, { passive: false });
+  function endTouch(e) {
+    lastTouchAt = Date.now();
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === activeTouchId) activeTouchId = null;
+    }
+  }
+  stage.addEventListener('touchend', endTouch);
+  stage.addEventListener('touchcancel', endTouch);
+
+  function startGame(zen) {
+    Sound.unlock();
+    game = createWorld(20261009);
+    game.labels = labelsOn;
+    setLegend(labelsOn);
+    if (zen) { game.auto = true; input.auto = true; $('btn-auto').classList.add('on'); }
+    mode = 'play';
+    show(null);
+    syncHud(game);
+  }
+  function resetGame() { startGame(input.auto); }
+
+  var labelsOn = true;
+
+  // 实体按键
+  [['btn-pull', 'pull'], ['btn-auto', 'auto'], ['btn-labels', 'labels']].forEach(function (pair) {
+    var el = $(pair[0]);
+    if (!el) return;
+    if (pair[1] === 'pull') {
+      var press = function (e) {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        Sound.unlock();
+        input.pull = true; el.classList.add('on');
+      };
+      var rel = function (e) {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        input.pull = false; el.classList.remove('on');
+      };
+      el.addEventListener('pointerdown', press);
+      el.addEventListener('pointerup', rel);
+      el.addEventListener('pointercancel', rel);
+      el.addEventListener('pointerleave', rel);
+      el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    } else {
+      el.addEventListener('click', function (e) {
+        e.preventDefault(); Sound.unlock();
+        if (pair[1] === 'auto') {
+          input.auto = !input.auto;
+          if (game) { game.auto = input.auto; game.userHold = 0; }
+          el.classList.toggle('on', input.auto);
+        } else {
+          labelsOn = !labelsOn;
+          if (game) game.labels = labelsOn;
+          el.classList.toggle('on', labelsOn);
+          setLegend(labelsOn);
+        }
+      });
+    }
+  });
+  input.auto = false;
+  $('btn-auto').classList.remove('on');
+  $('btn-labels').classList.add('on');
+  setLegend(true);
+
+  var btnPulse = $('btn-pulse');
+  if (btnPulse) btnPulse.addEventListener('click', function (e) {
+    e.preventDefault(); Sound.unlock();
+    if (mode === 'menu') { startGame(false); return; }
+    if (game) pulse(game);
+  });
+  var btnSpawn = $('btn-spawn');
+  if (btnSpawn) btnSpawn.addEventListener('click', function (e) {
+    e.preventDefault(); Sound.unlock();
+    if (mode === 'menu') { startGame(false); return; }
+    if (game) spawnCluster(game, 80);
+  });
+  var btnPause2 = $('btn-pause2');
+  if (btnPause2) btnPause2.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (mode === 'play') { mode = 'pause'; if (game) game.paused = true; show('pause'); }
+    else if (mode === 'pause') { mode = 'play'; if (game) game.paused = false; show(null); }
+  });
+  var btnSound2 = $('btn-sound2');
+  if (btnSound2) btnSound2.addEventListener('click', function (e) {
+    e.preventDefault(); Sound.setMuted(!Sound.isMuted()); updateSoundBtn();
+  });
+
+  function updateSoundBtn() {
+    var m = Sound.isMuted();
+    els.btnSound.textContent = m ? '🔇' : '🔊';
+    els.btnSound.setAttribute('aria-pressed', m ? 'false' : 'true');
+    var b2 = $('btn-sound2');
+    if (b2) b2.firstChild.textContent = m ? '静音中' : '声音';
+  }
+  updateSoundBtn();
+
+  $('btn-start').addEventListener('click', function () { startGame(false); });
+  $('btn-zen').addEventListener('click', function () {
+    $('btn-auto').classList.add('on');
+    input.auto = true;
+    startGame(true);
+  });
+  $('btn-resume').addEventListener('click', function () {
+    mode = 'play'; if (game) game.paused = false; show(null);
+  });
+  $('btn-reset').addEventListener('click', function () { resetGame(); });
+  els.btnSound.addEventListener('click', function () { Sound.setMuted(!Sound.isMuted()); updateSoundBtn(); });
+  $('btn-pause').addEventListener('click', function () {
+    if (mode === 'play') { mode = 'pause'; if (game) game.paused = true; show('pause'); }
+    else if (mode === 'pause') { mode = 'play'; if (game) game.paused = false; show(null); }
+  });
+
+  window.addEventListener('keydown', function (e) {
+    var k = e.key;
+    if (k === ' ') { e.preventDefault(); Sound.unlock(); if (mode === 'menu') startGame(false); else if (game) pulse(game); }
+    else if (k === 'f' || k === 'F') { if (game) spawnCluster(game, 80); }
+    else if (k === 'a' || k === 'A') { $('btn-auto').click(); }
+    else if (k === 'l' || k === 'L') { $('btn-labels').click(); }
+    else if (k === 'm' || k === 'M') { Sound.setMuted(!Sound.isMuted()); updateSoundBtn(); }
+    else if (k === 'p' || k === 'P' || k === 'Escape') { $('btn-pause').click(); }
+    else if (k === 'r' || k === 'R') { if (mode !== 'menu') resetGame(); }
+  });
+  window.addEventListener('blur', function () {
+    input.pull = false; input.pointerX = null;
+    var el = $('btn-pull'); if (el) el.classList.remove('on');
+  });
+
+  // ---------------------------------------------------------------- 主循环
+  var acc = 0, last = 0, running = true;
+  var params = new URLSearchParams(location.search);
+  var shotTime = parseFloat(params.get('t') || '10');
+  var selftest = params.has('selftest');
+  var speedup = parseFloat(params.get('speed') || '1');
+
+  function frame(ts) {
+    if (!last) last = ts;
+    var dt = Math.min((ts - last) / 1000, MAX_FRAME);
+    last = ts;
+    if (mode === 'play' && game) {
+      acc += dt * speedup;
+      var guard = 0;
+      while (acc >= FIXED && guard < 900) { stepWorld(game, FIXED, input); acc -= FIXED; guard++; }
+      renderWorld(game, ctx);
+      syncHud(game);
+    } else if (game) {
+      renderWorld(game, ctx);
+    }
+    if (running) requestAnimationFrame(frame);
+  }
+
+  if (params.has('shot')) {
+    var lvl = parseInt(params.get('shot'), 10) || 1;
+    game = createWorld(20261009 + lvl);
+    mode = 'play';
+    input.auto = true; game.auto = true;
+    Sound.setSilent(true);
+    show(null);
+    runBot(game, shotTime);
+    fitCanvas();
+    renderWorld(game, ctx);
+    syncHud(game);
+    running = false;
+  } else if (!selftest) {
+    fitCanvas();
+    mode = 'menu';
+    game = createWorld(20261009);
+    renderWorld(game, ctx);
+    show('start');
+    requestAnimationFrame(frame);
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  // ---------------------------------------------------------------- 机器人 + 自测
+  function runBot(w, seconds, dt) {
+    dt = dt || FIXED;
+    Sound.setSilent(true);
+    var steps = Math.floor(seconds / dt);
+    for (var i = 0; i < steps; i++) {
+      if (i % 600 === 0) { w.pull = true; } else if (i % 600 === 240) { w.pull = false; }
+      if (i % 900 === 300) pulse(w);
+      if (i % 1500 === 700) spawnCluster(w, 60);
+      stepWorld(w, dt, { pointerX: null, pointerY: null, pull: w.pull, auto: true });
+    }
+    return w;
+  }
+
+  function runSelfTest() {
+    var results = { pass: true, checks: [] };
+    function check(name, ok, extra) {
+      results.checks.push({ name: name, ok: !!ok, extra: extra === undefined ? '' : String(extra) });
+      if (!ok) results.pass = false;
+    }
+    Sound.setSilent(true);
+
+    // 1) 初始状态
+    var w0 = createWorld(1234);
+    check('初始有粒子', w0.particles.length > 200, w0.particles.length);
+    check('初始质量 = 1000', w0.bh.mass === 1000, w0.bh.mass);
+    check('初始视界半径 = R0', Math.abs(w0.bh.r - R0) < 0.01, w0.bh.r);
+
+    // 2) 引力方向：静止粒子在洞右侧，一步后应向左加速
+    var w1 = createWorld(1234);
+    w1.particles.length = 0;
+    w1.particles.push({ kind: 'dust', x: w1.bh.x + 300, y: w1.bh.y, vx: 0, vy: 0, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], dead: false });
+    stepWorld(w1, FIXED, {});
+    var p1 = w1.particles[0];
+    check('引力把粒子拉向黑洞', p1 && p1.vx < 0, p1 ? p1.vx.toExponential(2) : 'gone');
+
+    // 3) 圆轨道稳定性：给圆轨道速度，跑 4 秒半径不应剧变
+    var w2 = createWorld(1234);
+    w2.particles.length = 0;
+    var R = 240, vc = Math.sqrt(w2.bh.gm / R);
+    w2.particles.push({ kind: 'dust', x: w2.bh.x + R, y: w2.bh.y, vx: 0, vy: vc, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], dead: false });
+    for (var s2 = 0; s2 < 120 * 4; s2++) stepWorld(w2, FIXED, {});
+    var orb = w2.particles[0];
+    var rr = orb ? Math.hypot(orb.x - w2.bh.x, orb.y - w2.bh.y) : 0;
+    check('圆轨道 4 秒内不散（半径变化 < 25%）', orb && Math.abs(rr - R) / R < 0.25, orb ? rr.toFixed(0) + ' px' : '被吃掉/飞走');
+
+    // 4) 吞噬：视界内一步吃掉并增加质量
+    var w3 = createWorld(1234);
+    w3.particles.length = 0;
+    w3.particles.push({ kind: 'star', x: w3.bh.x + w3.bh.r * 0.5, y: w3.bh.y, vx: 0, vy: 0, r: 3, m: 4, heat: 1, life: 0, maxLife: 0, trail: [], dead: false });
+    var m0 = w3.bh.mass;
+    stepWorld(w3, FIXED, {});
+    check('视界内的粒子被吞噬', w3.particles.length === 0, w3.particles.length);
+    check('吞噬后质量增加', w3.bh.mass === m0 + 4, w3.bh.mass - m0);
+
+    // 5) 洛希极限：行星在撕裂半径内变成碎片流
+    var w4 = createWorld(1234);
+    w4.particles.length = 0;
+    var rr4 = w4.bh.r * 3.2 + 20 * 2.5 - 2;   // 略小于洛希半径
+    w4.particles.push({ kind: 'planet', x: w4.bh.x + rr4, y: w4.bh.y, vx: 0, vy: 0, r: 20, m: 40, heat: 0, life: 0, maxLife: 0, trail: [], dead: false });
+    stepWorld(w4, FIXED, {});
+    var frags = w4.particles.filter(function (p) { return p.kind === 'frag'; }).length;
+    var planets = w4.particles.filter(function (p) { return p.kind === 'planet'; }).length;
+    check('行星在洛希极限内被撕碎', planets === 0 && frags >= 10, '碎片 ' + frags);
+
+    // 6) 长时间模拟：无 NaN、粒子不失控、种群维持
+    var w5 = createWorld(777);
+    var nan = 0, outside = 0;
+    for (var s5 = 0; s5 < 120 * 25; s5++) {
+      stepWorld(w5, FIXED, { auto: true });
+      if (s5 % 60 === 0) {
+        for (var pi = 0; pi < w5.particles.length; pi++) {
+          var pp = w5.particles[pi];
+          if (!isFinite(pp.x) || !isFinite(pp.y) || !isFinite(pp.vx) || !isFinite(pp.vy)) nan++;
+          var dd = Math.hypot(pp.x - w5.bh.x, pp.y - w5.bh.y);
+          if (dd > 2000) outside++;
+        }
+      }
+    }
+    check('25 秒模拟无 NaN', nan === 0, nan);
+    check('没有粒子跑到 2000px 之外', outside === 0, outside);
+    check('粒子数不超过上限', w5.particles.length <= MAX_PARTICLES, w5.particles.length);
+    check('自动漫游时确实吃到了东西', w5.eaten > 20, w5.eaten);
+    check('质量在增长', w5.bh.mass > 1000, w5.bh.mass);
+    check('半径随质量变大', w5.bh.r > R0, w5.bh.r.toFixed(1));
+
+    // 7) 脉冲：远处粒子被拉近
+    var w6 = createWorld(1234);
+    w6.particles.length = 0;
+    w6.particles.push({ kind: 'dust', x: w6.bh.x + 400, y: w6.bh.y, vx: 0, vy: 0, r: 2, m: 1, heat: 0, life: 0, maxLife: 0, trail: [], dead: false });
+    var ok6 = pulse(w6);
+    check('脉冲可用', ok6 === true);
+    var vc6 = Math.sqrt(w6.bh.gm / 400);
+    check('脉冲给的内向冲量 ≥ 轨道速度的 10%', w6.particles[0].vx < -vc6 * 0.1, w6.particles[0].vx.toFixed(1) + ' vs vc=' + vc6.toFixed(1));
+    check('脉冲进入冷却', w6.pulseCd > 0, w6.pulseCd.toFixed(1));
+    check('冷却中不能重复脉冲', pulse(w6) === false);
+
+    // 8) 吸力增强 → 引力更大
+    var w7 = createWorld(1234);
+    w7.pull = true;
+    for (var s7 = 0; s7 < 60; s7++) stepWorld(w7, FIXED, {});
+    var gmBoosted = w7.bh.gm;
+    var w8 = createWorld(1234);
+    for (var s8 = 0; s8 < 60; s8++) stepWorld(w8, FIXED, {});
+    check('吸力增强会提高引力', gmBoosted > w8.bh.gm * 1.4, gmBoosted.toExponential(2) + ' vs ' + w8.bh.gm.toExponential(2));
+
+    // 9) 撒星星
+    var w9 = createWorld(1234);
+    var n0 = w9.particles.length;
+    spawnCluster(w9, 80);
+    check('撒星星会增加粒子', w9.particles.length > n0, (w9.particles.length - n0) + ' 个');
+
+    // 10) 粒子数到上限时不再增加
+    var w10 = createWorld(1234);
+    for (var s10 = 0; s10 < 900; s10++) spawnCluster(w10, 200);
+    check('粒子数受上限保护', w10.particles.length <= MAX_PARTICLES, w10.particles.length);
+
+    // 11) 性能：1000 粒子单步耗时
+    var w11 = createWorld(1234);
+    while (w11.particles.length < 1000) spawnParticle(w11, 'dust', true);
+    var t0 = (performance && performance.now) ? performance.now() : Date.now();
+    for (var s11 = 0; s11 < 120; s11++) stepWorld(w11, FIXED, {});
+    var elapsed = ((performance && performance.now) ? performance.now() : Date.now()) - t0;
+    var perStep = elapsed / 120;
+    check('1000 粒子单步 < 6ms（能跑满 60fps）', perStep < 6, perStep.toFixed(2) + ' ms/步');
+
+    // 12) 按钮
+    var ids = ['btn-pull', 'btn-pulse', 'btn-spawn', 'btn-auto', 'btn-labels', 'btn-sound2', 'btn-pause2'];
+    var missing = ids.filter(function (id) { return !document.getElementById(id); });
+    check('七个实体按键都在页面上', missing.length === 0, missing.join(','));
+    var pullEl = document.getElementById('btn-pull');
+    if (pullEl) {
+      input.pull = false;
+      pullEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 7 }));
+      check('按住「吸力」→ 引力增强生效', input.pull === true, 'pull=' + input.pull);
+      pullEl.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 7 }));
+      check('松开「吸力」→ 恢复', input.pull === false, 'pull=' + input.pull);
+    }
+    var autoEl = document.getElementById('btn-auto');
+    if (autoEl) {
+      var a0 = input.auto;
+      autoEl.click();
+      check('「自动漫游」可切换', input.auto !== a0, 'auto=' + input.auto);
+      autoEl.click();
+    }
+
+    var json = JSON.stringify(results, null, 1);
+    if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
+    document.title = (results.pass ? 'SELFTEST PASS' : 'SELFTEST FAIL') + ' ' +
+      results.checks.filter(function (c) { return !c.ok; }).length + ' failed';
+    return results;
+  }
+
+  if (selftest) {
+    try { window.__selftest = runSelfTest(); }
+    catch (err) {
+      if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = 'THREW: ' + err.message + '\n' + err.stack; }
+      document.title = 'SELFTEST THREW';
+    }
+  }
+
+  window.BlackHoleZen = {
+    createWorld: createWorld, stepWorld: stepWorld, renderWorld: renderWorld,
+    pulse: pulse, spawnCluster: spawnCluster, runBot: runBot, input: input,
+    getGame: function () { return game; }, getMode: function () { return mode; }
+  };
+})();
