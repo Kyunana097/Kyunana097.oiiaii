@@ -941,28 +941,54 @@
     game.paddle.targetX = pointerToLogicalX(e.clientX);
   });
   canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  var lastTouchAt = 0;
   stage.addEventListener('mousedown', function (e) {
     Sound.unlock();
     if (mode !== 'play' || !game) return;
+    // 触摸结束后浏览器会补发一次 mouse 事件，别让它误触磁场
+    if (Date.now() - lastTouchAt < 600) return;
     if (e.button === 0) { input.magnet = 1; needLaunch = true; }
     if (e.button === 2) input.magnet = -1;
   });
   window.addEventListener('mouseup', function () { input.magnet = 0; });
 
+  // 只跟踪「起手那根手指」：这样一只手按住磁场键、另一只手拖挡板不会互相抢
+  var activeTouchId = null;
   stage.addEventListener('touchstart', function (e) {
     Sound.unlock();
+    lastTouchAt = Date.now();
     if (mode !== 'play' || !game) return;
-    pointerActive = true;
-    needLaunch = true;
-    game.paddle.targetX = pointerToLogicalX(e.touches[0].clientX);
+    var t = e.changedTouches[0];
+    if (activeTouchId === null) activeTouchId = t.identifier;
+    if (t.identifier === activeTouchId) {
+      pointerActive = true;
+      needLaunch = true;
+      game.paddle.targetX = pointerToLogicalX(t.clientX);
+    }
     e.preventDefault();
   }, { passive: false });
   stage.addEventListener('touchmove', function (e) {
-    if (!pointerActive || mode !== 'play' || !game) return;
-    game.paddle.targetX = pointerToLogicalX(e.touches[0].clientX);
-    e.preventDefault();
+    lastTouchAt = Date.now();
+    if (activeTouchId === null || mode !== 'play' || !game) return;
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      if (t.identifier === activeTouchId) {
+        game.paddle.targetX = pointerToLogicalX(t.clientX);
+        e.preventDefault();
+      }
+    }
   }, { passive: false });
-  stage.addEventListener('touchend', function () { pointerActive = false; });
+  function endTouch(e) {
+    lastTouchAt = Date.now();
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === activeTouchId) {
+        activeTouchId = null;
+        pointerActive = false;
+      }
+    }
+  }
+  stage.addEventListener('touchend', endTouch);
+  stage.addEventListener('touchcancel', endTouch);
 
   window.addEventListener('keydown', function (e) {
     Sound.unlock();
