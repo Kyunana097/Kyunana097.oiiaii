@@ -35,7 +35,7 @@
   var GM_PAIR = 120000;         // 双星之间的相互引力（太弱会被黑洞潮汐力扯散，这也是真实的）
   var PAIR_SEP = 13;
   var JET_R = 105, JET_PUSH = 1600;
-  var ZEN_EXTRA = 0.55;         // 静观模式：在用户设的远近上再拉远这么多
+  var ZEN_DIST = 2.4;           // 静观模式：把「视角远近」拨到多少（和滑块是同一个量）
   var SCALE_MIN = 0.18;         // 相机最远（越小看得越广）
   // 引力透镜的观感参数：盘几乎是侧视的，所以直接像被压得很扁；
   // 背面来的光绕过黑洞后被压向光子环，在上、下各形成一道拱
@@ -432,8 +432,7 @@
 
     // --- 相机：静观模式缓慢拉远，镜头始终跟着黑洞
     var camDt = dt / clamp(w.timeScale || 1, 0.2, 3);   // 镜头按真实时间走，不受时间流速影响
-    var baseScale = 1 / clamp(w.camDist || camDist, 1, 2.5);
-    var wantScale = clamp(w.zen ? baseScale * ZEN_EXTRA : baseScale, SCALE_MIN, 1);
+    var wantScale = clamp(1 / clamp(w.camDist || camDist, 1, 2.5), SCALE_MIN, 1);
     w.cam.scale = lerp(w.cam.scale, wantScale, 1 - Math.exp(-camDt / 5));
     w.cam.x = lerp(w.cam.x, bh.x, 1 - Math.exp(-camDt / 1.0));
     w.cam.y = lerp(w.cam.y, bh.y, 1 - Math.exp(-camDt / 1.0));
@@ -1211,8 +1210,12 @@
     if (mode === 'menu') { startGame(false); return; }
     if (game) spawnCluster(game, 80);
   });
+  var preZenDist = 1;
   function toggleZen(on) {
     if (!game) return;
+    var was = game.zen;
+    if (on && !was) { preZenDist = camDist; setCamDist(ZEN_DIST); }     // 进入静观：拨远
+    if (!on && was) { setCamDist(preZenDist); }                         // 退出静观：拨回
     game.zen = !!on;
     if (on) { game.auto = true; input.auto = true; $('btn-auto').classList.add('on'); }
     var el = $('btn-zen');
@@ -1599,12 +1602,12 @@
 
     // 21) 静观模式：镜头拉远、自动漫游、退出后拉回
     var w20 = createWorld(2020);
-    toggleZen(true);
-    var g0 = game; game = w20; toggleZen(true); game = g0;
+    var g0 = game;
+    game = w20; setCamDist(1); toggleZen(true); game = g0;      // 进入静观（走真实路径）
     for (var s20 = 0; s20 < 120 * 8; s20++) stepWorld(w20, FIXED, {});
     check('静观模式镜头会拉远', w20.cam.scale < 0.85, w20.cam.scale.toFixed(2));
-    w20.zen = false;
-    for (var s21 = 0; s21 < 120 * 8; s21++) stepWorld(w20, FIXED, {});
+    game = w20; toggleZen(false); game = g0;                   // 退出静观
+    for (var s21 = 0; s21 < 120 * 14; s21++) stepWorld(w20, FIXED, {});
     check('退出静观后镜头拉回', w20.cam.scale > 0.9, w20.cam.scale.toFixed(2));
 
     // 22) 顶栏重复按钮已移除
@@ -1649,10 +1652,18 @@
       for (var sn = 0; sn < 120 * 10; sn++) stepWorld(wNear, FIXED, {});
       check('拉近会回到 1.0', Math.abs(wNear.cam.scale - 1) < 0.05, wNear.cam.scale.toFixed(2));
       check('画布宽度不再被滑块改动', !stage.style.width || stage.style.width === '100%', '"' + stage.style.width + '"');
-      var wZen = createWorld(5150);
-      wZen.camDist = 1; wZen.zen = true;
-      for (var sz = 0; sz < 120 * 14; sz++) stepWorld(wZen, FIXED, {});
-      check('静观会在设定远近上再拉远', wZen.cam.scale < 0.7, wZen.cam.scale.toFixed(2));
+      var prevGameObj = game;
+      game = createWorld(5150);
+      setCamDist(1);
+      toggleZen(true);
+      check('静观会把「视角远近」拨到 ×2.4（同一个量）', Math.abs(getCamDist() - 2.4) < 0.01, '×' + getCamDist());
+      var dEl2 = document.getElementById('dist');
+      check('滑块位置也跟着走', dEl2 && Math.abs(parseFloat(dEl2.value) - 240) < 1, dEl2 ? dEl2.value : '无');
+      for (var sz = 0; sz < 120 * 14; sz++) stepWorld(game, FIXED, {});
+      check('静观确实把相机拉远了', game.cam.scale < 0.6, game.cam.scale.toFixed(2));
+      toggleZen(false);
+      check('退出静观会把远近拨回原值 ×1.0', Math.abs(getCamDist() - 1) < 0.01, '×' + getCamDist());
+      game = prevGameObj;
       dEl.value = dOld;
       dEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -1763,6 +1774,31 @@
     try { renderWorld(jw, ctx); } catch (e) { jErr = e.message; }
     check('上下两批喷流同时渲染不报错', jErr === '', jErr);
     setTilt(saveTilt);
+
+    // 31) 显示框大小绝不被这些控件改动；资源要带版本号（否则浏览器会跑旧代码）
+    var widthBefore = stage.style.width;
+    setCamDist(2.5);
+    setCamDist(1);
+    var prevG2 = game;
+    game = createWorld(7777); setCamDist(1);
+    toggleZen(true); toggleZen(false);
+    game = prevG2;
+    check('任何远近/静观操作都不会改画布显示框宽度',
+          stage.style.width === widthBefore, '"' + stage.style.width + '" → "' + widthBefore + '"');
+    // 直接量像素：显示框（画布）的实际尺寸不该被这些控件改动
+    var boxBefore = canvas.getBoundingClientRect();
+    setCamDist(2.5);
+    var boxFar = canvas.getBoundingClientRect();
+    setCamDist(1);
+    var boxNear = canvas.getBoundingClientRect();
+    check('拉远/拉近时画布实际像素尺寸不变',
+          Math.abs(boxFar.width - boxBefore.width) < 0.5 && Math.abs(boxNear.width - boxBefore.width) < 0.5,
+          boxBefore.width.toFixed(1) + 'px → ' + boxFar.width.toFixed(1) + 'px');
+    var scr = document.querySelector('script[src*="game.js"]');
+    var lnk = document.querySelector('link[href*="style.css"]');
+    check('脚本与样式带版本号（避免缓存跑旧代码）',
+          !!scr && /[?&]v=\d+/.test(scr.getAttribute('src')) && !!lnk && /[?&]v=\d+/.test(lnk.getAttribute('href')),
+          (scr ? scr.getAttribute('src') : '无脚本'));
 
     var json = JSON.stringify(results, null, 1);
     if (selftestEl) { selftestEl.hidden = false; selftestEl.textContent = json; }
