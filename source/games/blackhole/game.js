@@ -20,7 +20,8 @@
   var SHADOW_K = 2.6;                   // 阴影半径 / Rs
   var PHOTON_K = 1.5;                   // 光子球 / Rs
   var ISCO_K = 3;                       // 最内稳定圆轨道 / Rs
-  var PULSE_R = 520, PULSE_CD = 5;
+  var PULSE_R = 520;
+  var JET_CD = 6;                 // 喷流冷却：自动漫游、手动脉冲、吞噬触发的喷流共用这一个
 
   var KINDS = {
     dust:   { r0: 1.1, r1: 2.1, m: 1,  color: '#a9bcdd' },
@@ -317,7 +318,7 @@
       stars: [], nebula: [],
       auto: false, autoTimer: 0, autoTx: W * 0.5, autoTy: H * 0.5, userHold: 0,
       labels: true, pull: false, pulseFlare: 0,
-      pulseCd: 0, spawnAcc: 0, eaten: 0, spawned: 0, bestMass: 1000,
+      jetCd: 0, spawnAcc: 0, eaten: 0, spawned: 0, bestMass: 1000,
       lastSpecial: {}, specialCount: { comet: 0, nebula: 0, minibh: 0 },
       rate: 0, rateAvg: 0, massLog: 1000, flash: 0, milestone: 0,
       phil: 0, philText: '', philBand: 0,
@@ -353,7 +354,7 @@
 
   // 各类天体的出现概率（显式写出来，方便调"刷新频率"）
   var SPAWN_P = {
-    minibh: 0.006,     // 小黑洞：最稀有，一颗能存在很久
+    minibh: 0.0016,     // 小黑洞：最稀有，一颗能存在很久
     comet:  0.032,     // 彗星
     nebula: 0.011,     // 星云团：一颗就散出两百多颗尘埃，不能常来
     planet: 0.045,     // 行星
@@ -361,7 +362,7 @@
   };
   // 特殊天体的最小间隔（秒）：光靠概率不够——吃得越猛刷得越快，
   // 加了这个冷却之后，无论节奏多快都保证稀有
-  var SPECIAL_CD = { comet: 12, nebula: 35, minibh: 75 };
+  var SPECIAL_CD = { comet: 80, nebula: 35, minibh: 75 };
   function specialReady(w, kind) {
     return (w.time - (w.lastSpecial[kind] === undefined ? -999 : w.lastSpecial[kind])) > SPECIAL_CD[kind];
   }
@@ -468,6 +469,7 @@
     var jetN = 0;
     for (var c = 0; c < w.particles.length; c++) if (w.particles[c].kind === 'jet') jetN++;
     if (jetN > 130) return;                      // 别让喷流无限堆积
+    w.jetCd = JET_CD;                            // 喷流只有一个冷却，谁触发的都算
     for (var s = -1; s <= 1; s += 2) {
       for (var i = 0; i < n; i++) {
         var spread = (rnd() - 0.5) * 0.5;
@@ -547,8 +549,8 @@
   }
 
   function pulse(w) {
-    if (w.pulseCd > 0) return false;
-    w.pulseCd = PULSE_CD;
+    if (w.jetCd > 0) return false;               // 自动喷流刚喷过，这里也会被挡
+    w.jetCd = JET_CD;
     for (var i = 0; i < w.particles.length; i++) {
       var p = w.particles[i];
       if (p.kind === 'jet') continue;
@@ -584,7 +586,7 @@
     } else if (hasPointer && !w.autoHintShown) {
       w.autoHintShown = true;
       w.hint = 4.5;
-      w.hintText = '漫游中：鼠标不接管（关掉「自动漫游」就能自己拖）';
+      w.hintText = '漫游中';
     }
     if (w.auto) {
       w.autoTimer -= dt;
@@ -622,7 +624,7 @@
 
     // --- 吸力增强 / 冷却 / 亮度
     bh.boost = lerp(bh.boost, (w.pull || inp.pull) ? 1 : 0, 1 - Math.pow(0.01, dt));
-    if (w.pulseCd > 0) w.pulseCd = Math.max(0, w.pulseCd - dt);
+    if (w.jetCd > 0) w.jetCd = Math.max(0, w.jetCd - dt);
     var gm = Math.min(GM_CAP, GM0 * Math.pow(bh.mass / 1000, 0.45)) * (1 + bh.boost * 0.95);
     bh.gm = gm;
     var ratio = clamp(Math.log10(Math.max(1, bh.mass / 1000)) / 1.4, 0, 1);
@@ -792,11 +794,15 @@
     if (w.auto) {
       w.autoJetTimer -= dt;
       if (w.autoJetTimer <= 0) {
-        w.autoJetTimer = 5 + rnd() * 9;
-        fireJets(w, 0.5 + rnd() * 0.7);
-        w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 2, max: 300, life: 1, color: '#bfe6ff' });
-        w.autoJets = (w.autoJets || 0) + 1;
-        if (w.isMain) Sound.jet();
+        if (w.jetCd > 0) {
+          w.autoJetTimer = 0.5;                  // 冷却中：等一会儿再看
+        } else {
+          w.autoJetTimer = 5 + rnd() * 9;
+          fireJets(w, 0.5 + rnd() * 0.7);
+          w.rings.push({ x: bh.x, y: bh.y, r: bh.r * 2, max: 300, life: 1, color: '#bfe6ff' });
+          w.autoJets = (w.autoJets || 0) + 1;
+          if (w.isMain) Sound.jet();
+        }
       }
     }
 
@@ -880,11 +886,7 @@
         w.philText = PHILOSOPHY[(band - 1) % PHILOSOPHY.length];
       }
       if (bh.mass > EVENT_MIN_MASS) {
-        if (!w.eventsUnlocked) {              // 刚到 20000 这一档：宣布解锁
-          w.eventsUnlocked = true;
-          w.hint = 4.5;
-          w.hintText = '解锁：特殊事件（之后每次质量过万随机来一次）';
-        }
+        if (!w.eventsUnlocked) w.eventsUnlocked = true;   // 刚到 20000 这一档：解锁（不再额外提示）
         triggerMilestoneEvent(w);
       }
       Sound.chime(true);
@@ -1390,7 +1392,7 @@
     els.rate.textContent = r > 9 ? '炽热' : (r > 4 ? '活跃' : (r > 1.2 ? '微亮' : '平静'));
     var pb = $('btn-pulse');
     if (pb) {
-      var cd = w.pulseCd;
+      var cd = w.jetCd;
       pb.classList.toggle('cool', cd > 0);
       pb.disabled = cd > 0;
       pb.firstChild.textContent = cd > 0 ? ('脉冲 ' + cd.toFixed(0) + 's') : '脉冲';
@@ -1874,7 +1876,7 @@
     check('脉冲可用', ok6 === true);
     var vc6 = Math.sqrt(w6.bh.gm / 400);
     check('脉冲给的内向冲量 ≥ 轨道速度的 10%', w6.particles[0].vx < -vc6 * 0.1, w6.particles[0].vx.toFixed(1) + ' vs vc=' + vc6.toFixed(1));
-    check('脉冲进入冷却', w6.pulseCd > 0, w6.pulseCd.toFixed(1));
+    check('脉冲进入冷却（共享的喷流冷却）', w6.jetCd > 0, w6.jetCd.toFixed(1) + ' 秒');
     check('冷却中不能重复脉冲', pulse(w6) === false);
     var w6b = createWorld(1235);
     var jetsBefore = w6b.particles.filter(function (p) { return p.kind === 'jet'; }).length;
@@ -2316,9 +2318,9 @@
     wCd.particles.length = 0;
     for (var scd = 0; scd < 120 * 300; scd++) stepWorld(wCd, FIXED, {});
     var cC = wCd.specialCount.comet, cN = wCd.specialCount.nebula, cM = wCd.specialCount.minibh;
-    check('5 分钟内彗星不超过 30 颗（冷却 12 秒）', cC <= 30, cC + ' 颗');
-    check('5 分钟内星云团不超过 12 团（冷却 35 秒）', cN <= 12, cN + ' 团');
-    check('5 分钟内小黑洞不超过 6 颗（冷却 75 秒）', cM <= 6, cM + ' 颗');
+    check('5 分钟内彗星不超过冷却允许的数量', cC <= Math.ceil(300 / SPECIAL_CD.comet) + 2, cC + ' 颗（冷却 ' + SPECIAL_CD.comet + ' 秒）');
+    check('5 分钟内星云团不超过冷却允许的数量', cN <= Math.ceil(300 / SPECIAL_CD.nebula) + 2, cN + ' 团（冷却 ' + SPECIAL_CD.nebula + ' 秒）');
+    check('5 分钟内小黑洞不超过冷却允许的数量', cM <= Math.ceil(300 / SPECIAL_CD.minibh) + 2, cM + ' 颗（冷却 ' + SPECIAL_CD.minibh + ' 秒）');
     check('特殊天体确实会出现（不是被掐死）', cC >= 3 && cN >= 1, '彗星 ' + cC + ' / 星云 ' + cN + ' / 小黑洞 ' + cM);
     // 猛吃（按住吸力）时场子不能被吃空 —— 这是刚才过度限流犯过的错
     var wD = createWorld(3400);
@@ -2480,20 +2482,20 @@
 
     // 里程碑会触发事件（质量过 20000 才开放），且不会连着重样
     var wEv = createWorld(5600);
-    var seenIds = [], unlockNotice = '', band1Fired = false;
+    var seenIds = [], band1Fired = false;
     for (var band2 = 1; band2 <= 8; band2++) {
       wEv.bh.mass = band2 * 10000 + 500;
       var beforeSeq = wEv.eventSeq;
       stepWorld(wEv, FIXED, {});
       var fired = wEv.eventSeq > beforeSeq;
       if (band2 === 1 && fired) band1Fired = true;
-      if (band2 === 2) unlockNotice = wEv.hintText;
       if (fired) seenIds.push(wEv.eventId + '#' + band2);
     }
     check('质量 10000 时不触发特殊事件', !band1Fired, band1Fired ? '竟然触发了' : '没有');
     check('质量过 20000 才解锁（第 2 档开始）',
           seenIds.length === 7 && /#2$/.test(seenIds[0]), seenIds.join(' → '));
-    check('解锁时会给出提示', /解锁/.test(unlockNotice) && /特殊事件/.test(unlockNotice), unlockNotice);
+    check('20000 解锁（不再单独弹提示，直接来事件）',
+          wEv.eventsUnlocked === true && /特殊事件/.test(wEv.evText), wEv.evText);
     check('事件不会连着两次一样', (function () {
       for (var i = 1; i < seenIds.length; i++) if (seenIds[i] === seenIds[i - 1]) return false;
       return true;
@@ -2520,6 +2522,44 @@
     check('文案写进了 DOM', (function () {
       var el = document.getElementById('pause-line');
       return !!el && el.textContent === seqOfLines[seqOfLines.length - 1];
+    })());
+
+    // 37) 自动喷流与手动喷流共用一个冷却
+    var wJ = createWorld(7700);
+    wJ.particles.length = 0;
+    wJ.auto = true;
+    check('一开始喷流可用', wJ.jetCd <= 0);
+    wJ.autoJetTimer = 0;                       // 逼自动喷流立刻喷一次
+    stepWorld(wJ, FIXED, {});
+    var jetsAuto = wJ.particles.filter(function (p) { return p.kind === 'jet'; }).length;
+    check('漫游时会自动喷流', jetsAuto > 0, jetsAuto + ' 个喷流粒子');
+    check('自动喷流会占用共享冷却', wJ.jetCd > 0, wJ.jetCd.toFixed(1) + ' 秒');
+    check('自动喷流后手动脉冲被挡住', pulse(wJ) === false, 'jetCd=' + wJ.jetCd.toFixed(1));
+
+    var wJ2 = createWorld(7701);
+    wJ2.particles.length = 0;
+    wJ2.auto = true;
+    check('手动脉冲可用', pulse(wJ2) === true);
+    check('手动脉冲也会占用同一个冷却', wJ2.jetCd > 0, wJ2.jetCd.toFixed(1) + ' 秒');
+    var jetsBefore2 = wJ2.particles.filter(function (p) { return p.kind === 'jet'; }).length;
+    wJ2.autoJetTimer = 0;                      // 自动喷流想喷，但冷却中
+    for (var sjc = 0; sjc < 60; sjc++) stepWorld(wJ2, FIXED, {});
+    var jetsAfter2 = wJ2.particles.filter(function (p) { return p.kind === 'jet'; }).length;
+    check('冷却期间自动喷流不会补一发', jetsAfter2 <= jetsBefore2 + 1,
+          jetsBefore2 + ' → ' + jetsAfter2 + ' 个');
+
+    wJ2.auto = false;                          // 关掉漫游：否则自动喷流会接着占冷却（这也是共享生效的证明）
+    for (var sjd = 0; sjd < 120 * 8; sjd++) stepWorld(wJ2, FIXED, {});
+    check('冷却结束后手动脉冲恢复', wJ2.jetCd <= 0 && pulse(wJ2) === true, 'jetCd=' + wJ2.jetCd.toFixed(1));
+    check('JET_CD 是统一的常量', typeof JET_CD === 'number' && JET_CD > 0, JET_CD + ' 秒');
+    check('吞噬触发的喷流也占用同一个冷却', (function () {
+      var wj3 = createWorld(7702);
+      wj3.particles.length = 0;
+      wj3.jetCd = 0;
+      wj3.particles.push({ kind: 'planet', x: wj3.bh.x + 4, y: wj3.bh.y, vx: 0, vy: 0, r: 8, m: 60,
+                           heat: 0, life: 0, maxLife: 0, trail: [], seed: 1, dead: false, cloud: 0 });
+      stepWorld(wj3, FIXED, {});
+      return wj3.jetCd > 0;
     })());
 
     var json = JSON.stringify(results, null, 1);
